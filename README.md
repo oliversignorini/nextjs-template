@@ -28,16 +28,16 @@ Sign in at `/login` as `member@demo.test` / `demo-password-123` (password
 
 ## Everyday commands
 
-| Command             | What it does                                                  |
-| -------------------- | -------------------------------------------------------------- |
-| `pnpm dev`           | Run the app (slot-aware: `pnpm dev:slot` under the factory)     |
-| `pnpm env:up`/`env:down`/`env:reset` | Manage the local Supabase stack                |
-| `pnpm lint` / `pnpm typecheck` | ESLint + `@shadcn/lint` + Prettier / `tsc --noEmit`   |
-| `pnpm test:unit`     | Vitest, DB-free                                               |
-| `pnpm test:db`       | pgTAP against the local Supabase stack                        |
-| `pnpm e2e` / `pnpm e2e:baseline` | Playwright (full suite / the specs CI runs)      |
-| `pnpm api:generate` / `pnpm api:check` | Regenerate `openapi.json` / fail on drift  |
-| `pnpm design:check`  | impeccable design detector                                    |
+| Command                                | What it does                                                |
+| -------------------------------------- | ----------------------------------------------------------- |
+| `pnpm dev`                             | Run the app (slot-aware: `pnpm dev:slot` under the factory) |
+| `pnpm env:up`/`env:down`/`env:reset`   | Manage the local Supabase stack                             |
+| `pnpm lint` / `pnpm typecheck`         | ESLint + `@shadcn/lint` + Prettier / `tsc --noEmit`         |
+| `pnpm test:unit`                       | Vitest, DB-free                                             |
+| `pnpm test:db`                         | pgTAP against the local Supabase stack                      |
+| `pnpm e2e` / `pnpm e2e:baseline`       | Playwright (full suite / the specs CI runs)                 |
+| `pnpm api:generate` / `pnpm api:check` | Regenerate `openapi.json` / fail on drift                   |
+| `pnpm design:check`                    | impeccable design detector                                  |
 
 Full command reference, the slot/worktree isolation model, and the
 service-layer/API-first rules are in [`AGENTS.md`](./AGENTS.md).

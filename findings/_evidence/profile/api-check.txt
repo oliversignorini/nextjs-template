@@ -1,0 +1,5 @@
+
+> nextjs-template@0.1.0 api:check C:\Users\Ollie Signorini\orca\workspaces\nextjs-template\profile-next
+> tsx scripts/openapi/generate.ts --check
+
+openapi.json is up to date.

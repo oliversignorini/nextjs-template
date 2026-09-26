@@ -1,0 +1,6 @@
+
+> nextjs-template@0.1.0 lint C:\Users\Ollie Signorini\orca\workspaces\nextjs-template\profile-next
+> eslint . && prettier --check .
+
+Checking formatting...
+All matched files use Prettier code style!
