@@ -5,10 +5,25 @@
 
 [1m[46m RUN [49m[22m [36mv4.0.18 [39m[90mC:/Users/Ollie Signorini/orca/workspaces/nextjs-template/profile-next[39m
 
+[90mstderr[2m | lib/api/errors.test.ts[2m > [22m[2mhandleApiError[2m > [22m[2mnever leaks internal error details for unknown errors
+[22m[39mError: database password is hunter2
+    at C:/Users/Ollie Signorini/orca/workspaces/nextjs-template/profile-next/lib/api/errors.test.ts:31:37
+    at [90mfile:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:145:11
+    at [90mfile:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:915:26
+    at [90mfile:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout [90m(file:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:1209:10[90m)[39m
+    at [90mfile:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:1653:37
+    at Traces.$ [90m(file:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/vitest@4.0.18_@types+node@20.19.32_@vitest+ui@4.0.18_jiti@2.7.0_jsdom@28.0.0_@noble+hashes@1._a3grysqu2lpsmv3vwjy7ec2m44/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27[90m)[39m
+    at trace [90m(file:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/vitest@4.0.18_@types+node@20.19.32_@vitest+ui@4.0.18_jiti@2.7.0_jsdom@28.0.0_@noble+hashes@1._a3grysqu2lpsmv3vwjy7ec2m44/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21[90m)[39m
+    at runTest [90m(file:///C:/Users/Ollie%20Signorini/orca/workspaces/nextjs-template/profile-next/[39mnode_modules/[4m.pnpm[24m/@vitest+runner@4.0.18/node_modules/[4m@vitest/runner[24m/dist/index.js:1653:12[90m)[39m
+
+ [32m✓[39m lib/api/errors.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m lib/profiles/service.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 4[2mms[22m[39m
  [32m✓[39m lib/notes/service.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 5[2mms[22m[39m
 
-[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
-[2m      Tests [22m [1m[32m3 passed[39m[22m[90m (3)[39m
-[2m   Start at [22m 20:49:49
-[2m   Duration [22m 1.39s[2m (transform 61ms, setup 158ms, import 170ms, tests 5ms, environment 842ms)[22m
+[2m Test Files [22m [1m[32m3 passed[39m[22m[90m (3)[39m
+[2m      Tests [22m [1m[32m9 passed[39m[22m[90m (9)[39m
+[2m   Start at [22m 20:53:00
+[2m   Duration [22m 1.58s[2m (transform 142ms, setup 533ms, import 575ms, tests 23ms, environment 2.88s)[22m
 
