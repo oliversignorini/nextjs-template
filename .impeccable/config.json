@@ -1,0 +1,11 @@
+{
+  "hooks": {
+    "enabled": false
+  },
+  "detector": {
+    "designSystem": {
+      "enabled": true
+    },
+    "ignoreFiles": ["components/ui/**"]
+  }
+}

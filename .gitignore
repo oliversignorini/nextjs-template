@@ -30,6 +30,16 @@ yarn-error.log*
 # local env files
 .env*.local
 
+# software factory: per-slot Supabase satellite projects + dev logs
+/.factory/
+
+# impeccable hook cache
+.impeccable/hook.cache.json
+
+# supabase local dev
+supabase/.temp/
+supabase/.branches/
+
 # vercel
 .vercel
 

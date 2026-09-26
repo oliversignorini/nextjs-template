@@ -1,0 +1,217 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "nextjs-template API",
+    "version": "1.0.0",
+    "description": "Every capability the UI has, exposed as a versioned HTTP JSON API for agents and MCP clients."
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Supabase access token, or use the browser session cookie instead."
+      }
+    },
+    "schemas": {
+      "Note": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "title",
+          "body",
+          "created_at"
+        ]
+      },
+      "CreateNoteInput": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "body": {
+            "type": "string",
+            "maxLength": 10000,
+            "default": ""
+          }
+        },
+        "required": [
+          "title"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/api/v1/notes": {
+      "get": {
+        "summary": "List the caller's notes, newest first",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of notes",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Note"
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNoteInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/notes/{id}": {
+      "get": {
+        "summary": "Get a single note",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The note",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Note"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete a note (owner only -- RLS denies other roles/users)",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found, or not visible/writable to the caller"
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

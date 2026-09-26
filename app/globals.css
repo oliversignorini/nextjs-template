@@ -1,57 +1,91 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import 'tailwindcss';
+@import 'tw-animate-css';
 
-@layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 47.4% 11.2%;
-    --card: 0 0% 100%;
-    --card-foreground: 222.2 47.4% 11.2%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 222.2 47.4% 11.2%;
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
-    --destructive: 0 84% 60%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 47.4% 11.2%;
-    --radius: 0.5rem;
-  }
+@custom-variant dark (&:is(.dark *));
 
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-  }
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+/* Ocean palette, copied from ui-oliversignorini's app/globals.css (theme tokens only). */
+:root {
+  --radius: 0.5rem;
+
+  --background: #fafbfd;
+  --foreground: #1e2a35;
+
+  --card: #ffffff;
+  --card-foreground: #1e2a35;
+  --popover: #ffffff;
+  --popover-foreground: #1e2a35;
+
+  --primary: #1a6b8a;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f4f8;
+  --secondary-foreground: #1e2a35;
+  --muted: #f0f4f8;
+  --muted-foreground: #5a6e7f;
+  --accent: #e8f4f8;
+  --accent-foreground: #1a6b8a;
+
+  --destructive: oklch(0.577 0.245 27.325);
+
+  --border: #e2e8f0;
+  --input: #e2e8f0;
+  --ring: #1a6b8a;
+}
+
+.dark {
+  --background: #0a1420;
+  --foreground: #e6edf3;
+
+  --card: #0f1c2b;
+  --card-foreground: #e6edf3;
+  --popover: #122130;
+  --popover-foreground: #e6edf3;
+
+  --primary: #2d96b4;
+  --primary-foreground: #0a1420;
+  --secondary: #122130;
+  --secondary-foreground: #e6edf3;
+  --muted: #122130;
+  --muted-foreground: #8a9bad;
+  --accent: #14323e;
+  --accent-foreground: #7fd0e8;
+
+  --destructive: oklch(0.704 0.191 22.216);
+
+  --border: #1e3344;
+  --input: #1e3344;
+  --ring: #2d96b4;
 }
 
 @layer base {
   * {
-    @apply border-border;
+    @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
