@@ -53,6 +53,13 @@ copy its shape, not its content.
   like a production schema change -- no destructive change without a plan
   for existing data, no missing `down` story (Supabase migrations are
   forward-only here, so get the `up` right).
+- `supabase/config.toml` only enables Postgres, Auth and Mailpit (`api`,
+  `db`, `auth`, `local_smtp`, `studio`) -- this profile's contract.
+  `storage`, `realtime`, `analytics` and `edge_runtime` are disabled: they
+  aren't used by the demo resource, cost real RAM on a shared factory host,
+  and (analytics/edge_runtime) have ports `scripts/factory/factory.mjs`
+  doesn't remap per slot. Re-enable per-app if a feature needs one, and add
+  its port(s) to `BASE_PORTS` in `factory.mjs` first if you do.
 
 ## Software-factory profile (`next-supabase-vercel`)
 
