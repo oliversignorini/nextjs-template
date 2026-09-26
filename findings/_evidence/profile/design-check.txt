@@ -1,0 +1,5 @@
+
+> nextjs-template@0.1.0 design:check C:\Users\Ollie Signorini\orca\workspaces\nextjs-template\profile-next
+> npx --yes impeccable@4.1.0 detect --json app components
+
+[]
