@@ -70,8 +70,18 @@ function projectId(s = slot()) {
   return `nextjs-template-s${s}`
 }
 
+/** --workdir wants the directory *containing* a supabase/ folder, used
+ * exactly as given with no ancestor search -- not the supabase/ folder
+ * itself. Passing the wrong one means the CLI finds no config.toml at all
+ * and silently falls back to a default project_id derived from the
+ * satellite dir's own basename, which is how slot 4 first collided with an
+ * unrelated leftover "supabase-s4" stack on this host. */
 function satelliteDir(s = slot()) {
   return join(ROOT, '.factory', `supabase-s${s}`)
+}
+
+function satelliteSupabaseDir(s = slot()) {
+  return join(satelliteDir(s), 'supabase')
 }
 
 // ------------------------------------------------------ satellite project
@@ -80,7 +90,7 @@ function satelliteDir(s = slot()) {
  * renders config.toml with this slot's ports + project_id, so a bare
  * `supabase db reset --workdir <satellite>` only ever touches this slot. */
 function renderSatellite(s) {
-  const dir = satelliteDir(s)
+  const dir = satelliteSupabaseDir(s)
   mkdirSync(dir, { recursive: true })
   for (const name of ['migrations', 'seed.sql', 'tests']) {
     const src = join(ROOT, 'supabase', name)
