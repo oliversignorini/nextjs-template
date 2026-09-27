@@ -100,7 +100,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      app_role_from_metadata: {
+        Args: { meta: Json }
+        Returns: Database['public']['Enums']['app_role']
+      }
     }
     Enums: {
       app_role: 'admin' | 'member'
