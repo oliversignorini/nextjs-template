@@ -1,0 +1,5 @@
+-- Schema-level seed data only. `supabase db reset` runs this automatically
+-- after migrations. Demo *users* (one per role) and their demo rows are
+-- seeded separately by scripts/supabase/seed.ts via the Auth Admin API,
+-- because auth.users rows need GoTrue, not raw SQL -- see AGENTS.md >
+-- Data & access control. `pnpm env:reset` runs both, in order.
