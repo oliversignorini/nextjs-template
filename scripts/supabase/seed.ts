@@ -32,7 +32,7 @@ async function ensureUser(email: string, role: 'admin' | 'member') {
     email,
     password: DEMO_PASSWORD,
     email_confirm: true,
-    user_metadata: { role },
+    app_metadata: { role },
   })
   if (error) throw error
   return data.user

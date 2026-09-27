@@ -14,22 +14,18 @@ create table public.profiles (
 alter table public.profiles enable row level security;
 
 -- Every authenticated user can read every profile (needed for role-aware nav
--- and to resolve "who owns this" in the UI); only the owner can update their
--- own non-role fields, and only via the service layer (role changes are a
--- separate admin-only capability, not implemented in this skeleton).
+-- and to resolve "who owns this" in the UI). No update/insert/delete policy:
+-- this skeleton has no user-editable profile field (email mirrors
+-- auth.users and role is admin-only), so there is no legitimate self-service
+-- write to allow. A future app that adds one (e.g. a display name) should
+-- add a narrowly-scoped policy for that column, not reopen this one.
 create policy "profiles_select_authenticated" on public.profiles
   for select
   to authenticated
   using (true);
 
-create policy "profiles_update_own" on public.profiles
-  for update
-  to authenticated
-  using (id = (select auth.uid()))
-  with check (id = (select auth.uid()) and role = (select role from public.profiles where id = (select auth.uid())));
-
--- No insert/delete policy: profile rows are created only by the trigger
--- below (security definer, bypasses RLS) and never deleted directly.
+-- Profile rows are created only by the trigger below (security definer,
+-- bypasses RLS) and never updated or deleted directly.
 
 create function public.handle_new_user()
 returns trigger
@@ -38,11 +34,17 @@ security definer
 set search_path = ''
 as $$
 begin
+  -- SECURITY: role must come from raw_app_meta_data, never
+  -- raw_user_meta_data. user_metadata is set by the client at signup
+  -- (supabase.auth.signUp({options:{data:{role:'admin'}}})) with only the
+  -- anon key -- trusting it lets anyone self-register as admin.
+  -- app_metadata can only be set by the service role (the Admin API), which
+  -- is what scripts/supabase/seed.ts uses.
   insert into public.profiles (id, email, role)
   values (
     new.id,
     new.email,
-    coalesce(new.raw_user_meta_data ->> 'role', 'member')::public.app_role
+    coalesce(new.raw_app_meta_data ->> 'role', 'member')::public.app_role
   );
   return new;
 end;
