@@ -188,36 +188,41 @@ set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
 insert into public.idempotency_keys (user_id, key, request_hash, response, claim_token, created_at)
 values ('22222222-2222-2222-2222-222222222222', 'stale-key', 'h1', null, gen_random_uuid(), now() - interval '1 minute');
 
+-- A data-modifying CTE must be top-level (Postgres rejects one nested
+-- inside another statement, which is-()'s argument list counts as), so
+-- stash each reclaim attempt's row count in a temp table first.
+create temporary table reclaim_attempt_1 as
+with reclaim as (
+  update public.idempotency_keys
+  set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
+  where user_id = '22222222-2222-2222-2222-222222222222'
+    and key = 'stale-key'
+    and response is null
+    and created_at < now() - interval '30 seconds'
+  returning claim_token
+)
+select count(*)::int as n from reclaim;
+
 select is(
-  (
-    with reclaim as (
-      update public.idempotency_keys
-      set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
-      where user_id = '22222222-2222-2222-2222-222222222222'
-        and key = 'stale-key'
-        and response is null
-        and created_at < now() - interval '30 seconds'
-      returning claim_token
-    )
-    select count(*)::int from reclaim
-  ),
+  (select n from reclaim_attempt_1),
   1,
   'first reclaim of a stale claim succeeds (exactly one row)'
 );
 
+create temporary table reclaim_attempt_2 as
+with reclaim as (
+  update public.idempotency_keys
+  set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
+  where user_id = '22222222-2222-2222-2222-222222222222'
+    and key = 'stale-key'
+    and response is null
+    and created_at < now() - interval '30 seconds'
+  returning claim_token
+)
+select count(*)::int as n from reclaim;
+
 select is(
-  (
-    with reclaim as (
-      update public.idempotency_keys
-      set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
-      where user_id = '22222222-2222-2222-2222-222222222222'
-        and key = 'stale-key'
-        and response is null
-        and created_at < now() - interval '30 seconds'
-      returning claim_token
-    )
-    select count(*)::int from reclaim
-  ),
+  (select n from reclaim_attempt_2),
   0,
   'a second reclaim attempt immediately after the first gets zero rows -- it lost the race, not a duplicate win'
 );

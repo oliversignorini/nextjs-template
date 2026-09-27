@@ -28,6 +28,7 @@ export type Database = {
     Tables: {
       idempotency_keys: {
         Row: {
+          claim_token: string
           created_at: string
           key: string
           request_hash: string
@@ -35,6 +36,7 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          claim_token?: string
           created_at?: string
           key: string
           request_hash: string
@@ -42,6 +44,7 @@ export type Database = {
           user_id: string
         }
         Update: {
+          claim_token?: string
           created_at?: string
           key?: string
           request_hash?: string
