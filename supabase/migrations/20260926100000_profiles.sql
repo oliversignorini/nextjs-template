@@ -27,6 +27,24 @@ create policy "profiles_select_authenticated" on public.profiles
 -- Profile rows are created only by the trigger below (security definer,
 -- bypasses RLS) and never updated or deleted directly.
 
+-- Never a bare `::public.app_role` cast on caller-supplied metadata: an
+-- unrecognized value (a typo, or a role name not yet in this enum) would
+-- raise "invalid input value for enum" and fail the *entire* auth.users
+-- write, including unrelated ones like a login's app_metadata rewrite for
+-- providers. Unknown/missing/null all fall back to 'member' instead.
+create function public.app_role_from_metadata(meta jsonb)
+returns public.app_role
+language sql
+immutable
+set search_path = ''
+as $$
+  select case meta ->> 'role'
+    when 'admin' then 'admin'::public.app_role
+    when 'member' then 'member'::public.app_role
+    else 'member'::public.app_role
+  end
+$$;
+
 create function public.handle_new_user()
 returns trigger
 language plpgsql
@@ -41,11 +59,7 @@ begin
   -- app_metadata can only be set by the service role (the Admin API), which
   -- is what scripts/supabase/seed.ts uses.
   insert into public.profiles (id, email, role)
-  values (
-    new.id,
-    new.email,
-    coalesce(new.raw_app_meta_data ->> 'role', 'member')::public.app_role
-  );
+  values (new.id, new.email, public.app_role_from_metadata(new.raw_app_meta_data));
   return new;
 end;
 $$;
@@ -70,7 +84,7 @@ set search_path = ''
 as $$
 begin
   update public.profiles
-  set role = coalesce(new.raw_app_meta_data ->> 'role', 'member')::public.app_role
+  set role = public.app_role_from_metadata(new.raw_app_meta_data)
   where id = new.id;
   return new;
 end;

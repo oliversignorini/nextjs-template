@@ -3,7 +3,7 @@
 // pulling in server-only auth/service code (that script runs under plain
 // Node, not the Next.js server runtime).
 import { registry } from '@/lib/openapi/registry'
-import { commonErrorResponses, idempotencyKeyHeader } from '@/lib/openapi/common'
+import { commonErrorResponses, errorResponse, idempotencyKeyHeader } from '@/lib/openapi/common'
 import { paginationQuerySchema } from '@/lib/api/pagination'
 import { createNoteSchema, noteSchema, notesPageSchema } from '@/lib/notes/schemas'
 
@@ -37,10 +37,9 @@ registry.registerPath({
       description: 'The created note',
       content: { 'application/json': { schema: noteSchema } },
     },
-    409: {
-      description:
-        'Idempotency-Key reused with a different body, or a request with it is still in flight',
-    },
+    409: errorResponse(
+      'Idempotency-Key reused with a different body, or a request with it is still in flight'
+    ),
     ...commonErrorResponses,
   },
 })

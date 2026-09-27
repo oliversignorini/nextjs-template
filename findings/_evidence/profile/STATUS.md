@@ -1,6 +1,21 @@
 # Profile build evidence -- status
 
-Last updated: 2026-09-27, FACTORY_SLOT=4, round 1 (review fixes).
+Last updated: 2026-09-27, FACTORY_SLOT=4, round 2 (re-review fixes).
+
+## Round 2
+
+Fixed the round-2 re-review's one blocking finding (N-0: CI was red on
+Linux only -- `api:check` drifted because the OpenAPI spec generator walked
+`app/api/v1` with an unsorted `readdirSync`, so path/component order in
+`openapi.json` depended on the filesystem's directory-entry order, which
+NTFS happens to return alphabetically and ext4 does not) and all 3 new
+majors (N-1 cursor injection, N-2 idempotency key stuck after a failed
+create, N-3 backslash open redirect), plus several of the minors. See the
+PR description for the full list and `docs/profiles-build/reviews/next-supabase-r1.md`
+for the source review. `pnpm test:unit` grew from 11 to 27 (new tests for
+hostile cursors, the redirect helper's backslash/control-character cases,
+and the idempotency release-on-failure path); pgTAP grew from 18 to 19 (an
+unrecognized `app_metadata.role` value regression test, m-5).
 
 ## Round 1
 
@@ -23,21 +38,22 @@ slot 4 after the fixes:
   the insert-only trigger missed the seeded admin's role. Added a second
   trigger; see the PR description. **All contract commands verified passing.**
 
-## Summary
+## Summary (kept in sync with the latest round -- see the round sections above/below for what changed and why)
 
 | Command                       | Result                                   | Evidence              |
 | ----------------------------- | ---------------------------------------- | --------------------- |
 | `pnpm lint`                   | pass                                     | `lint.txt`            |
 | `pnpm typecheck`              | pass                                     | `typecheck.txt`       |
-| `pnpm test:unit`              | pass, 9/9                                | `test-unit.txt`       |
-| `pnpm build`                  | pass                                     | `build.txt`           |
-| `pnpm design:check`           | pass, 0 findings                         | `design-check.txt`    |
-| `pnpm api:check`              | pass, no drift                           | `api-check.txt`       |
+| `pnpm test:unit`              | pass, 27/27                              | `test-unit.txt`       |
+| `pnpm build`                  | pass (round 0)                           | `build.txt`           |
+| `pnpm design:check`           | pass, 0 findings (round 0)               | `design-check.txt`    |
+| `pnpm api:check`              | pass, no drift (Windows and Linux)       | `api-check.txt`       |
 | `pnpm env:up` / `env:reset`   | pass                                     | `env-reset.txt`       |
 | `pnpm health`                 | pass (`{"slot":4,"web":true,"ok":true}`) | --                    |
-| `pnpm test:db` (pgTAP)        | pass, 9/9                                | `test-db.txt`         |
-| `pnpm e2e:baseline`           | pass, 5/5                                | `e2e-baseline.txt`    |
-| Isolation proof (slots 4 + 5) | pass                                     | `isolation-proof.txt` |
+| `pnpm test:db` (pgTAP)        | pass, 19/19                              | `test-db.txt`         |
+| `pnpm e2e:baseline`           | pass, 10/10                              | `e2e-baseline.txt`    |
+| Isolation proof (slots 4 + 5) | pass (round 0)                           | `isolation-proof.txt` |
+| CI (GitHub Actions)           | see round 2 section                      | CI run URL in PR body |
 
 ## Environment incidents worked through (all fixed, not worked around)
 

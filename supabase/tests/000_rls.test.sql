@@ -1,5 +1,5 @@
 begin;
-select plan(18);
+select plan(19);
 
 -- Generic, table-agnostic: a new table that ships without RLS enabled or
 -- without a policy fails this immediately, instead of silently passing a
@@ -55,6 +55,17 @@ select is(
   (select role::text from public.profiles where id = '66666666-6666-6666-6666-666666666666'),
   'admin',
   'app_metadata set via a later UPDATE (as the Admin API does) still lands in profiles.role'
+);
+
+-- m-5 regression: an unrecognized role value (typo, or a role name not yet
+-- in this enum) must fall back to 'member', not raise "invalid input value
+-- for enum" and fail the whole auth.users write.
+insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+values ('00000000-0000-0000-0000-000000000000', '77777777-7777-7777-7777-777777777777', 'authenticated', 'authenticated', 'unknown-role@pgtap.local', 'x', now(), '{"role":"owner"}', '{}', now(), now());
+select is(
+  (select role::text from public.profiles where id = '77777777-7777-7777-7777-777777777777'),
+  'member',
+  'an unrecognized app_metadata.role value falls back to member instead of erroring'
 );
 
 -- B-1 regression: a client can only ever set user_metadata (the anon key,

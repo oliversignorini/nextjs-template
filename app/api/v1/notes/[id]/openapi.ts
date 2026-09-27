@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { registry } from '@/lib/openapi/registry'
-import { commonErrorResponses } from '@/lib/openapi/common'
+import { commonErrorResponses, errorResponse } from '@/lib/openapi/common'
 import { noteSchema } from '@/lib/notes/schemas'
 
 export const paramsSchema = z.object({ id: z.uuid() })
@@ -13,7 +13,7 @@ registry.registerPath({
   request: { params: paramsSchema },
   responses: {
     200: { description: 'The note', content: { 'application/json': { schema: noteSchema } } },
-    404: { description: 'Not found' },
+    404: errorResponse('Not found'),
     ...commonErrorResponses,
   },
 })
@@ -26,7 +26,7 @@ registry.registerPath({
   request: { params: paramsSchema },
   responses: {
     204: { description: 'Deleted' },
-    404: { description: 'Not found, or not visible/writable to the caller' },
+    404: errorResponse('Not found, or not visible/writable to the caller'),
     ...commonErrorResponses,
   },
 })

@@ -22,7 +22,10 @@ async function latestMessageTo(request: import('@playwright/test').APIRequestCon
 function firstLink(body: string): string {
   const match = body.match(/https?:\/\/[^\s"<)]+/)
   if (!match) throw new Error('no link found in email body')
-  return match[0]
+  // An HTML body's href is &amp;-encoded between query params; a Text body
+  // never is. Decode either way so this doesn't silently request a URL
+  // with a literal "&amp;" in it if the Text part is ever empty/missing.
+  return match[0].replace(/&amp;/g, '&')
 }
 
 // @baseline @magic-link -- proves the local magic-link flow actually
