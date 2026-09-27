@@ -7,14 +7,23 @@ create table public.notes (
   created_at timestamptz not null default now()
 );
 
-create index notes_user_id_created_at_idx on public.notes (user_id, created_at desc);
+-- (created_at, id) is the keyset pagination order: created_at alone ties on
+-- same-transaction/batch inserts.
+create index notes_user_id_created_at_id_idx on public.notes (user_id, created_at desc, id desc);
 
 -- Idempotency keys for POST /api/v1/notes (agents/clients may retry safely).
+-- Keyed per user (a global key let one user squat another's key and break
+-- their retries under RLS) with a request hash (a reused key with a
+-- different body is a caller bug, not a safe retry -- rejected with 409)
+-- and a nullable response (null while the note-creation write is still in
+-- flight, so a concurrent retry sees "in progress" instead of a half state).
 create table public.idempotency_keys (
-  key text primary key,
   user_id uuid not null references auth.users (id) on delete cascade,
-  response jsonb not null,
-  created_at timestamptz not null default now()
+  key text not null,
+  request_hash text not null,
+  response jsonb,
+  created_at timestamptz not null default now(),
+  primary key (user_id, key)
 );
 
 alter table public.notes enable row level security;
