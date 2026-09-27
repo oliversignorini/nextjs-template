@@ -38,6 +38,16 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const MARKER = '# managed-by: scripts/factory/factory.mjs'
 const IS_WINDOWS = process.platform === 'win32'
 
+// Pinned past the CLI's own default resolution for postgres `major_version
+// = 17`: 17.6.1.171 has a corrupted image on this host (0-byte
+// docker-entrypoint.sh/gosu, reproduced independently of this repo) and
+// re-pulling the same tag doesn't fix it. 17.6.1.172 is pulled and
+// verified intact. The CLI reads this exact file to pick the patch
+// version, so every slot's satellite gets one. Bump it (or drop it once
+// the CLI's own default is >= this) if the corrupted image is ever cleaned
+// up host-wide.
+const PINNED_POSTGRES_VERSION = '17.6.1.172'
+
 const BASE_PORTS = {
   WEB_PORT: 3000,
   SUPABASE_API_PORT: 54321,
@@ -111,6 +121,10 @@ function renderSatellite(s) {
     `additional_redirect_urls = ["http://127.0.0.1:${p.WEB_PORT}"]`
   )
   writeFileSync(join(dir, 'config.toml'), toml)
+
+  mkdirSync(join(dir, '.temp'), { recursive: true })
+  writeFileSync(join(dir, '.temp', 'postgres-version'), PINNED_POSTGRES_VERSION)
+
   return dir
 }
 

@@ -60,6 +60,16 @@ copy its shape, not its content.
   and (analytics/edge_runtime) have ports `scripts/factory/factory.mjs`
   doesn't remap per slot. Re-enable per-app if a feature needs one, and add
   its port(s) to `BASE_PORTS` in `factory.mjs` first if you do.
+- **Postgres image pin:** `factory.mjs` writes `postgres-version` (currently
+  `17.6.1.172`) into every slot's satellite `.temp/` dir, which is what the
+  Supabase CLI reads to pick the Postgres patch version -- it does not rely
+  on the CLI's own default resolution for `major_version = 17`. This exists
+  because `17.6.1.171`'s image had a corrupted local unpack on the factory
+  host (`docker-entrypoint.sh`/`gosu` were 0 bytes, reproducible
+  independently of this repo, not fixed by `docker rmi` + re-pull -- Docker
+  relinked the same corrupted blob by digest). Bump `PINNED_POSTGRES_VERSION`
+  in `factory.mjs` if a newer patch is verified good, or drop the pin
+  entirely once the CLI's own default is confirmed >= a known-good version.
 
 ## Software-factory profile (`next-supabase-vercel`)
 
