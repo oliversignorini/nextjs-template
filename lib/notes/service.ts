@@ -1,5 +1,5 @@
 import 'server-only'
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ApiErrors, mapDbError } from '@/lib/api/errors'
 import { decodeCursor, encodeCursor, type Page, type PaginationQuery } from '@/lib/api/pagination'
@@ -65,55 +65,80 @@ function hashRequest(input: CreateNoteInput): string {
 
 // A claim (response still null) older than this is treated as abandoned --
 // the process that made it almost certainly crashed or lost its connection
-// before it could record a response -- and is reclaimed instead of
+// before it could record a response -- and is reclaimable instead of
 // rejecting every future retry forever.
 const STALE_CLAIM_MS = 30_000
 
+type ClaimResult = { done: true; note: Note } | { done: false; token: string }
+
+/** claim_token identifies which in-flight attempt owns a pending row. The
+ * reclaim below is a single `UPDATE ... WHERE response is null AND
+ * created_at < threshold ... RETURNING claim_token`: Postgres re-checks that
+ * WHERE clause against the row's latest committed state when it takes the
+ * row lock, so of two concurrent reclaim attempts on the same stale row,
+ * exactly one gets a row back (the first to commit changes created_at,
+ * which makes the second's WHERE clause no longer match). N-4: the previous
+ * delete-then-insert reclaim had no such guarantee -- two concurrent
+ * retries of a stale claim could both "win" and both create a note. */
 async function claimIdempotencyKey(
   supabase: Client,
   userId: string,
   key: string,
   requestHash: string
-): Promise<Note | undefined> {
+): Promise<ClaimResult> {
+  const token = randomUUID()
   const { error: claimError } = await supabase
     .from('idempotency_keys')
-    .insert({ user_id: userId, key, request_hash: requestHash, response: null })
+    .insert({ user_id: userId, key, request_hash: requestHash, response: null, claim_token: token })
 
-  if (!claimError) return undefined // claimed it; caller proceeds to create the note
+  if (!claimError) return { done: false, token } // claimed it fresh; caller proceeds to create the note
   if (claimError.code !== '23505') throw mapDbError(claimError)
 
   const { data: existing, error: lookupError } = await supabase
     .from('idempotency_keys')
-    .select('request_hash, response, created_at')
+    .select('request_hash, response')
     .eq('user_id', userId)
     .eq('key', key)
     .maybeSingle()
 
   if (lookupError) throw mapDbError(lookupError)
   if (!existing) {
-    // Raced with a delete (e.g. another request just reclaimed and is
-    // retrying) -- caller can retry the claim itself.
+    // Raced with a delete (another request's failed attempt just released
+    // it) -- caller can retry the claim itself.
     throw ApiErrors.conflict('A request with this Idempotency-Key is already in progress.')
   }
   if (existing.request_hash !== requestHash) {
     throw ApiErrors.conflict('This Idempotency-Key was already used with a different request body.')
   }
-  if (existing.response !== null) return existing.response as Note
+  if (existing.response !== null) return { done: true, note: existing.response as Note }
 
-  const age = Date.now() - new Date(existing.created_at).getTime()
-  if (age < STALE_CLAIM_MS) {
+  // In progress and (maybe) stale. Attempt the atomic reclaim directly --
+  // its WHERE clause is the real gate, not a separate age check beforehand:
+  // that would leave a window between checking and acting for another
+  // request to reclaim first.
+  const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
+  const { data: reclaimed, error: reclaimError } = await supabase
+    .from('idempotency_keys')
+    .update({
+      request_hash: requestHash,
+      response: null,
+      claim_token: token,
+      created_at: new Date().toISOString(),
+    })
+    .eq('user_id', userId)
+    .eq('key', key)
+    .is('response', null)
+    .lt('created_at', staleBefore)
+    .select('claim_token')
+    .maybeSingle()
+
+  if (reclaimError) throw mapDbError(reclaimError)
+  if (!reclaimed) {
+    // Not stale yet, or another request reclaimed it a moment ago -- either
+    // way, this caller does not hold the claim.
     throw ApiErrors.conflict('A request with this Idempotency-Key is already in progress.')
   }
-  // Stale: reclaim it. If a concurrent request wins this race, our insert
-  // 23505s and the caller's next attempt (there is none here -- creating a
-  // note is the only follow-up, and it will simply create a second note in
-  // that vanishingly rare double-crash scenario, same tradeoff as below).
-  await supabase.from('idempotency_keys').delete().eq('user_id', userId).eq('key', key)
-  const { error: reclaimError } = await supabase
-    .from('idempotency_keys')
-    .insert({ user_id: userId, key, request_hash: requestHash, response: null })
-  if (reclaimError && reclaimError.code !== '23505') throw mapDbError(reclaimError)
-  return undefined
+  return { done: false, token }
 }
 
 export async function createNote(
@@ -123,10 +148,12 @@ export async function createNote(
   opts: { idempotencyKey?: string } = {}
 ): Promise<Note> {
   const requestHash = opts.idempotencyKey ? hashRequest(input) : undefined
+  let claimToken: string | undefined
 
   if (opts.idempotencyKey && requestHash) {
-    const existing = await claimIdempotencyKey(supabase, userId, opts.idempotencyKey, requestHash)
-    if (existing) return existing
+    const claim = await claimIdempotencyKey(supabase, userId, opts.idempotencyKey, requestHash)
+    if (claim.done) return claim.note
+    claimToken = claim.token
   }
 
   const { data, error } = await supabase
@@ -141,33 +168,41 @@ export async function createNote(
     // response=null -- every retry, forever, gets 409 "already in
     // progress" for a request that never actually completed. Release the
     // claim so a retry with the same key gets a clean second attempt.
-    if (opts.idempotencyKey) {
+    //
+    // Scoped by claim_token (N-4): if someone else has since reclaimed
+    // this key (our own claim went stale before we got here), this delete
+    // must not touch their live row -- eq('claim_token', claimToken)
+    // affects zero rows in that case, exactly as intended.
+    if (opts.idempotencyKey && claimToken) {
       await supabase
         .from('idempotency_keys')
         .delete()
         .eq('user_id', userId)
         .eq('key', opts.idempotencyKey)
+        .eq('claim_token', claimToken)
     }
     throw mapDbError(error)
   }
 
-  if (opts.idempotencyKey) {
+  if (opts.idempotencyKey && claimToken) {
     const { error: updateError } = await supabase
       .from('idempotency_keys')
       .update({ response: data })
       .eq('user_id', userId)
       .eq('key', opts.idempotencyKey)
+      .eq('claim_token', claimToken)
     // The note itself was created successfully -- return it to this caller
-    // regardless. But if we failed to record the response, release the
-    // claim too: leaving it at null would strand a future retry the same
-    // way an insert failure would (better a rare duplicate note on retry
-    // than a key stuck in "in progress" forever).
+    // regardless. But if we failed to record the response, release our
+    // claim too (same claim_token scoping as above): leaving it at null
+    // would strand a future retry the same way an insert failure would
+    // (better a rare duplicate note on retry than a key stuck forever).
     if (updateError) {
       await supabase
         .from('idempotency_keys')
         .delete()
         .eq('user_id', userId)
         .eq('key', opts.idempotencyKey)
+        .eq('claim_token', claimToken)
     }
   }
 

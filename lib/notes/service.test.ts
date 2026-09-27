@@ -154,6 +154,61 @@ describe('createNote', () => {
     ).rejects.toMatchObject({ status: 409 })
   })
 
+  // N-4 regression: losing the atomic reclaim race (another request's
+  // UPDATE already changed the row, so ours matches zero rows) must be a
+  // 409, and must never fall through to creating a note. This is the unit
+  // half of the pgTAP CAS test in supabase/tests/000_rls.test.sql, which
+  // proves the UPDATE...WHERE...RETURNING itself has at most one winner.
+  it('rejects with a conflict when it loses the atomic stale-claim reclaim race, without creating a note', async () => {
+    const input = { title: 'hi', body: '' }
+    const { createHash } = await import('node:crypto')
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    let notesInsertCalled = false
+
+    const supabase = {
+      from: (table: string) => {
+        if (table !== 'idempotency_keys') {
+          notesInsertCalled = true
+          throw new Error('must not attempt to create a note after losing the reclaim race')
+        }
+        return {
+          insert: () => Promise.resolve({ data: null, error: { code: '23505' } }),
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({ data: { request_hash: hash, response: null }, error: null }),
+              }),
+            }),
+          }),
+          update: () => ({
+            eq: () => ({
+              eq: () => ({
+                is: () => ({
+                  lt: () => ({
+                    select: () => ({
+                      // The reclaim UPDATE matched no rows: someone else
+                      // already reclaimed it (or it wasn't actually stale).
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })).rejects.toMatchObject(
+      {
+        status: 409,
+      }
+    )
+    expect(notesInsertCalled).toBe(false)
+  })
+
   // N-2 regression: a failed create must release its claimed key so a
   // retry with the same Idempotency-Key can actually succeed, instead of
   // getting 409 "already in progress" forever.
@@ -161,6 +216,18 @@ describe('createNote', () => {
     const idempotencyRows = new Map<string, { request_hash: string; response: unknown }>()
     const input = { title: 'hi', body: '' }
     let notesInsertShouldFail = true
+
+    // A chainable stub whose .eq() calls can nest arbitrarily deep (the
+    // real code scopes writes by user_id + key + claim_token), resolving
+    // only once a terminal method is awaited.
+    function eqChain(resolve: () => unknown) {
+      const node = {
+        eq: () => node,
+        maybeSingle: () => Promise.resolve(resolve()),
+        then: (onResolve: (v: unknown) => void) => onResolve(resolve()),
+      }
+      return node
+    }
 
     const supabase = {
       from: (table: string) => {
@@ -172,31 +239,18 @@ describe('createNote', () => {
               idempotencyRows.set(row.key, row)
               return Promise.resolve({ data: null, error: null })
             },
-            update: (values: { response: unknown }) => ({
-              eq: () => ({
-                eq: () => {
-                  const row = idempotencyRows.get('k1')
-                  if (row) row.response = values.response
-                  return Promise.resolve({ error: null })
-                },
+            update: (values: { response: unknown }) =>
+              eqChain(() => {
+                const row = idempotencyRows.get('k1')
+                if (row) row.response = values.response
+                return { error: null }
               }),
-            }),
-            delete: () => ({
-              eq: () => ({
-                eq: () => {
-                  idempotencyRows.delete('k1')
-                  return Promise.resolve({ error: null })
-                },
+            delete: () =>
+              eqChain(() => {
+                idempotencyRows.delete('k1')
+                return { error: null }
               }),
-            }),
-            select: () => ({
-              eq: () => ({
-                eq: () => ({
-                  maybeSingle: () =>
-                    Promise.resolve({ data: idempotencyRows.get('k1') ?? null, error: null }),
-                }),
-              }),
-            }),
+            select: () => eqChain(() => ({ data: idempotencyRows.get('k1') ?? null, error: null })),
           }
         }
         return {

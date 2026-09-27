@@ -17,11 +17,21 @@ create index notes_user_id_created_at_id_idx on public.notes (user_id, created_a
 -- different body is a caller bug, not a safe retry -- rejected with 409)
 -- and a nullable response (null while the note-creation write is still in
 -- flight, so a concurrent retry sees "in progress" instead of a half state).
+-- claim_token identifies which in-flight attempt currently owns a pending
+-- (response is null) row. Reclaiming a stale claim is a single atomic
+-- `UPDATE ... WHERE response is null AND created_at < <threshold> RETURNING
+-- claim_token` (lib/notes/service.ts): Postgres re-checks that WHERE clause
+-- against the row's latest committed state when it takes the row lock, so
+-- of two concurrent reclaim attempts exactly one gets a row back. Every
+-- later write for that attempt (recording the response, or releasing the
+-- claim on failure) is scoped by claim_token too, so a request that loses
+-- the race can never clobber the winner's row.
 create table public.idempotency_keys (
   user_id uuid not null references auth.users (id) on delete cascade,
-  key text not null,
+  key text not null check (char_length(key) between 1 and 255),
   request_hash text not null,
   response jsonb,
+  claim_token uuid not null default gen_random_uuid(),
   created_at timestamptz not null default now(),
   primary key (user_id, key)
 );

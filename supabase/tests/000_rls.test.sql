@@ -1,5 +1,5 @@
 begin;
-select plan(19);
+select plan(21);
 
 -- Generic, table-agnostic: a new table that ships without RLS enabled or
 -- without a policy fails this immediately, instead of silently passing a
@@ -170,6 +170,56 @@ set local request.jwt.claims = '{"sub":"33333333-3333-3333-3333-333333333333"}';
 select is_empty(
   $$select key from public.idempotency_keys where key = 'k1'$$,
   'a different member cannot see another user''s idempotency key'
+);
+reset role;
+
+-- N-4 regression: the stale-claim reclaim is a compare-and-set, not a
+-- delete-then-insert. Two concurrent retries racing the same UPDATE ...
+-- WHERE response is null AND created_at < threshold ... RETURNING can have
+-- at most one winner, because the first to commit changes created_at to
+-- now(), which is what makes the second's WHERE clause stop matching --
+-- this table can't run two real concurrent sessions, but this proves the
+-- CAS mechanism itself is correct: whichever session's UPDATE runs second
+-- (concurrently or not) against the post-first-reclaim state gets zero rows
+-- back, which lib/notes/service.ts treats as "I lost this race, don't
+-- create a note" (a 409, not a note).
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
+insert into public.idempotency_keys (user_id, key, request_hash, response, claim_token, created_at)
+values ('22222222-2222-2222-2222-222222222222', 'stale-key', 'h1', null, gen_random_uuid(), now() - interval '1 minute');
+
+select is(
+  (
+    with reclaim as (
+      update public.idempotency_keys
+      set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
+      where user_id = '22222222-2222-2222-2222-222222222222'
+        and key = 'stale-key'
+        and response is null
+        and created_at < now() - interval '30 seconds'
+      returning claim_token
+    )
+    select count(*)::int from reclaim
+  ),
+  1,
+  'first reclaim of a stale claim succeeds (exactly one row)'
+);
+
+select is(
+  (
+    with reclaim as (
+      update public.idempotency_keys
+      set request_hash = 'h1', response = null, claim_token = gen_random_uuid(), created_at = now()
+      where user_id = '22222222-2222-2222-2222-222222222222'
+        and key = 'stale-key'
+        and response is null
+        and created_at < now() - interval '30 seconds'
+      returning claim_token
+    )
+    select count(*)::int from reclaim
+  ),
+  0,
+  'a second reclaim attempt immediately after the first gets zero rows -- it lost the race, not a duplicate win'
 );
 reset role;
 
