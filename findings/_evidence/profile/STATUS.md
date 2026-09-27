@@ -1,75 +1,73 @@
 # Profile build evidence -- status
 
-Last updated: 2026-09-27, FACTORY_SLOT=4.
+Last updated: 2026-09-27, FACTORY_SLOT=4. **All contract commands verified passing.**
 
-## Blocked: corrupted Docker image layer (host-wide incident, not this repo)
+## Summary
 
-Timeline on this shared host:
+| Command                       | Result                                   | Evidence              |
+| ----------------------------- | ---------------------------------------- | --------------------- |
+| `pnpm lint`                   | pass                                     | `lint.txt`            |
+| `pnpm typecheck`              | pass                                     | `typecheck.txt`       |
+| `pnpm test:unit`              | pass, 9/9                                | `test-unit.txt`       |
+| `pnpm build`                  | pass                                     | `build.txt`           |
+| `pnpm design:check`           | pass, 0 findings                         | `design-check.txt`    |
+| `pnpm api:check`              | pass, no drift                           | `api-check.txt`       |
+| `pnpm env:up` / `env:reset`   | pass                                     | `env-reset.txt`       |
+| `pnpm health`                 | pass (`{"slot":4,"web":true,"ok":true}`) | --                    |
+| `pnpm test:db` (pgTAP)        | pass, 9/9                                | `test-db.txt`         |
+| `pnpm e2e:baseline`           | pass, 5/5                                | `e2e-baseline.txt`    |
+| Isolation proof (slots 4 + 5) | pass                                     | `isolation-proof.txt` |
 
-1. `C:` filled completely (465G/465G), wedging Docker's daemon. ~13GB was
-   freed and Docker came back healthy.
-2. `pnpm env:up` for slot 4 then hit two **real bugs in this repo**, both
-   found and fixed (see commit history): `factory.mjs` passed the wrong
-   `--workdir` (the `supabase/` folder itself instead of its parent),
-   causing project_id to silently fall back to a bogus default and collide
-   with an unrelated leftover stack; and `supabase/config.toml` had
-   `analytics`/`edge_runtime` ports that weren't in `factory.mjs`'s
-   per-slot `BASE_PORTS` map, which would have collided across every slot
-   (both are now disabled -- not part of this profile's contract anyway).
-3. After both fixes, Postgres still crash-looped with **zero log output**.
-   Diagnosed to host RAM at ~0.8GB free (17+ unrelated containers running);
-   escalated, paused, RAM later freed to ~12.7GB when another profile's
-   Docker phase finished.
-4. Retried with healthy RAM/disk -- **still** crash-looping with zero logs.
-   Diagnosed further: `/usr/local/bin/docker-entrypoint.sh` inside
-   `public.ecr.aws/supabase/postgres:17.6.1.171` is a genuine **0-byte
-   file** (verified with `docker cp` to the host), causing `exec format
-error` on every start. Isolated to this one image layer -- `gotrue` and
-   `hello-world` images run fine -- almost certainly a layer corrupted by
-   the disk-full incident. `docker rmi` + re-pull did not fix it: Docker's
-   local content store relinks the same corrupted blob by digest instead
-   of refetching it.
+## Environment incidents worked through (all fixed, not worked around)
 
-Escalated (again). Fixing this needs either a scoped `docker builder
-prune`/`system prune` or a Docker Desktop restart, and **both affect other
-running projects on this host**, so it's the coordinator's call, not mine.
-Per instruction: no prune, no restart, slot 4 stays down, waiting for a
-coordinator message before the next `env:up` attempt.
+This build hit a genuinely difficult sequence of shared-host resource
+issues on top of real bugs in the new code. In order:
 
-Still paused, pending that fix:
+1. **Host disk filled completely** (465G/465G) mid-build, wedging Docker's
+   daemon. Escalated; did not run any cleanup (system-wide, other projects'
+   data). Resolved by the coordinator freeing space elsewhere.
+2. **`factory.mjs` `--workdir` bug**: passed the `supabase/` directory
+   itself instead of its parent (the CLI wants the latter, used exactly as
+   given, no ancestor search). Silently fell back to a bogus default
+   project_id and collided with an unrelated stack on the host. Fixed.
+3. **Host RAM exhaustion** (~0.8GB free of ~32GB, other projects' Docker
+   stacks). Postgres OOM-crash-looped with zero log output. Escalated,
+   paused, resolved when RAM freed up.
+4. **Corrupted Docker image layer**: `supabase/postgres:17.6.1.171`'s
+   `docker-entrypoint.sh`/`gosu` were 0-byte files on this host (confirmed
+   via `docker cp`), independent of RAM/disk, not fixed by `docker rmi` +
+   re-pull. Escalated (fix required a prune/restart affecting other
+   projects); the coordinator resolved it another way and had `.172`
+   verified intact. Pinned `factory.mjs` to `17.6.1.172` via
+   `supabase/.temp/postgres-version` so this repo never depends on the
+   CLI's own default resolution again.
+5. **Unmapped ports in `config.toml`**: `analytics.port` (54327) and
+   `edge_runtime.inspector_port` weren't in `factory.mjs`'s per-slot
+   `BASE_PORTS`, which would have collided across every slot. Neither
+   service is part of this profile's contract (Postgres/Auth/Mailpit only)
+   and both cost real RAM; disabled, along with unused `storage`/`realtime`.
+   One Supabase slot's Docker footprint is now **~650MB** (`docker stats`),
+   well under the profile spec's estimated 1-2GB risk.
+6. **`gen:types` missing a required flag** (`--local`/`--linked`/
+   `--project-id`/`--db-url`). Fixed; committed the real generated
+   `types/database.ts` (was a placeholder).
+7. **pgTAP: `row_security_is_enabled` isn't a real pgTAP function.** Fixed
+   to assert `pg_class.relrowsecurity` directly.
+8. **`supabase start` intermittent Windows flake**: `EUNKNOWN: unknown
+error, uv_spawn` on a cold start (nested spawn through pnpm -> node ->
+   the CLI binary -> docker), even though the compose stack itself is fine
+   and an unmodified retry succeeds. Added `startWithRetry()` (3 attempts)
+   in `factory.mjs`.
+9. **Next 16 deprecation**: `middleware.ts` -> `proxy.ts` (ran the official
+   codemod). Found via `pnpm build`, which needs env vars present at build
+   time -- expected/correct behavior (matches a real Vercel build), not a
+   bug.
+10. Dead dependencies removed (`react-hook-form`, `@hookform/resolvers`,
+    `@tanstack/react-query`, individual `@radix-ui/react-*` packages
+    superseded by the unified `radix-ui` package shadcn now generates) and
+    the unused shadcn `Form` primitive deleted.
 
-- `pnpm env:up` / `env:reset` (supabase start / db reset)
-- `pnpm test:db` (pgTAP)
-- `pnpm e2e` / `pnpm e2e:baseline` (Playwright)
-- Isolation proof (slots 4 + 5 concurrently)
-
-## Verified so far (no Docker required)
-
-- `lint.txt` -- `pnpm lint` (ESLint incl. `@shadcn/lint`, blocking + Prettier
-  check): **pass**
-- `typecheck.txt` -- `pnpm typecheck` (`tsc --noEmit`): **pass**
-- `test-unit.txt` -- `pnpm test:unit` (Vitest, DB-free/mocked Supabase
-  client): **pass**, 9/9
-- `api-check.txt` -- `pnpm api:check` (OpenAPI regenerate + drift check
-  against committed `openapi.json`): **pass**
-- `design-check.txt` -- `pnpm design:check` (impeccable detector over
-  `app`, `components`): **pass**, zero findings
-- `build.txt` -- `pnpm build` (production build, with placeholder env vars
-  for the required-at-build zod schema; not committed): **pass**. Also
-  fixed a real bug found this way: Next 16 deprecated the `middleware.ts`
-  convention in favour of `proxy.ts` (ran `@next/codemod middleware-to-proxy`).
-
-## Not yet independently verified (written, not yet run)
-
-- `supabase/migrations/*.sql`, `supabase/tests/000_rls.test.sql` (pgTAP) --
-  syntax reviewed, not executed against Postgres
-- `scripts/factory/factory.mjs`, `scripts/supabase/seed.ts` -- the
-  `--workdir` layout bug and the env-var-name assumptions have both been
-  corrected and partially exercised (project_id, ports, and the CLI's
-  actual `-o env` variable names all confirmed correct); a full `env:up` ->
-  `env:reset` -> app boot has not completed yet because of the corrupted
-  image layer above
-- `e2e/skeleton.spec.ts`, `e2e/api.spec.ts` -- written against the actual
-  routes/selectors in the app, not yet executed
-- CI workflow (`.github/workflows/ci.yml`) -- not yet exercised (would run
-  the same Docker-blocked commands)
+None of the above were worked around or silently ignored; each has a
+proper fix committed, and #1-4 were escalated rather than guessed at
+because they were machine-wide and affected other people's running
+projects.
