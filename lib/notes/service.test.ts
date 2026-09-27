@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest'
 import { encodeCursor } from '@/lib/api/pagination'
 import { createNote, listNotes } from '@/lib/notes/service'
 
+const VALID_ID = '11111111-1111-4111-8111-111111111111'
+
 /** Minimal chainable fake matching the subset of the supabase-js query
  * builder the service uses. Keeps this suite DB-free (test:unit contract). */
 function fakeSupabase(overrides: { selectResult?: unknown; insertResult?: unknown } = {}) {
@@ -59,6 +61,22 @@ describe('listNotes', () => {
 
     expect(page.data).toHaveLength(2)
     expect(page.next_cursor).toBe(encodeCursor(rows[1]!))
+  })
+
+  // m-7 / M-3 regression: the keyset filter must use both created_at *and*
+  // id, not created_at alone (which silently skips tied rows), and the
+  // decoded values must reach the filter unchanged (N-1's validation is
+  // what makes that safe -- see lib/api/pagination.test.ts).
+  it('builds a two-part keyset filter from the decoded cursor', async () => {
+    const supabase = fakeSupabase({ selectResult: [] })
+    const cursor = encodeCursor({ created_at: '2026-01-01T00:00:00.000Z', id: VALID_ID })
+
+    await listNotes(supabase, { limit: 20, cursor })
+
+    const notesBuilder = supabase.from('notes')
+    expect(notesBuilder.or).toHaveBeenCalledWith(
+      `created_at.lt.2026-01-01T00:00:00.000Z,and(created_at.eq.2026-01-01T00:00:00.000Z,id.lt.${VALID_ID})`
+    )
   })
 })
 
@@ -134,5 +152,85 @@ describe('createNote', () => {
     await expect(
       createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
     ).rejects.toMatchObject({ status: 409 })
+  })
+
+  // N-2 regression: a failed create must release its claimed key so a
+  // retry with the same Idempotency-Key can actually succeed, instead of
+  // getting 409 "already in progress" forever.
+  it('releases a claimed Idempotency-Key when the note insert fails, so a retry can succeed', async () => {
+    const idempotencyRows = new Map<string, { request_hash: string; response: unknown }>()
+    const input = { title: 'hi', body: '' }
+    let notesInsertShouldFail = true
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: (row: { key: string; request_hash: string; response: unknown }) => {
+              if (idempotencyRows.has(row.key))
+                return Promise.resolve({ data: null, error: { code: '23505' } })
+              idempotencyRows.set(row.key, row)
+              return Promise.resolve({ data: null, error: null })
+            },
+            update: (values: { response: unknown }) => ({
+              eq: () => ({
+                eq: () => {
+                  const row = idempotencyRows.get('k1')
+                  if (row) row.response = values.response
+                  return Promise.resolve({ error: null })
+                },
+              }),
+            }),
+            delete: () => ({
+              eq: () => ({
+                eq: () => {
+                  idempotencyRows.delete('k1')
+                  return Promise.resolve({ error: null })
+                },
+              }),
+            }),
+            select: () => ({
+              eq: () => ({
+                eq: () => ({
+                  maybeSingle: () =>
+                    Promise.resolve({ data: idempotencyRows.get('k1') ?? null, error: null }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () => {
+                if (notesInsertShouldFail)
+                  return Promise.resolve({ data: null, error: { code: '08000' } })
+                return Promise.resolve({
+                  data: {
+                    id: 'n1',
+                    user_id: 'u1',
+                    ...input,
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                })
+              },
+            }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })).rejects.toMatchObject(
+      {
+        status: 500,
+      }
+    )
+    expect(idempotencyRows.has('k1')).toBe(false) // claim released, not stuck
+
+    notesInsertShouldFail = false
+    const note = await createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })
+    expect(note.id).toBe('n1')
   })
 })

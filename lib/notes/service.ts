@@ -63,6 +63,59 @@ function hashRequest(input: CreateNoteInput): string {
   return createHash('sha256').update(JSON.stringify(input)).digest('hex')
 }
 
+// A claim (response still null) older than this is treated as abandoned --
+// the process that made it almost certainly crashed or lost its connection
+// before it could record a response -- and is reclaimed instead of
+// rejecting every future retry forever.
+const STALE_CLAIM_MS = 30_000
+
+async function claimIdempotencyKey(
+  supabase: Client,
+  userId: string,
+  key: string,
+  requestHash: string
+): Promise<Note | undefined> {
+  const { error: claimError } = await supabase
+    .from('idempotency_keys')
+    .insert({ user_id: userId, key, request_hash: requestHash, response: null })
+
+  if (!claimError) return undefined // claimed it; caller proceeds to create the note
+  if (claimError.code !== '23505') throw mapDbError(claimError)
+
+  const { data: existing, error: lookupError } = await supabase
+    .from('idempotency_keys')
+    .select('request_hash, response, created_at')
+    .eq('user_id', userId)
+    .eq('key', key)
+    .maybeSingle()
+
+  if (lookupError) throw mapDbError(lookupError)
+  if (!existing) {
+    // Raced with a delete (e.g. another request just reclaimed and is
+    // retrying) -- caller can retry the claim itself.
+    throw ApiErrors.conflict('A request with this Idempotency-Key is already in progress.')
+  }
+  if (existing.request_hash !== requestHash) {
+    throw ApiErrors.conflict('This Idempotency-Key was already used with a different request body.')
+  }
+  if (existing.response !== null) return existing.response as Note
+
+  const age = Date.now() - new Date(existing.created_at).getTime()
+  if (age < STALE_CLAIM_MS) {
+    throw ApiErrors.conflict('A request with this Idempotency-Key is already in progress.')
+  }
+  // Stale: reclaim it. If a concurrent request wins this race, our insert
+  // 23505s and the caller's next attempt (there is none here -- creating a
+  // note is the only follow-up, and it will simply create a second note in
+  // that vanishingly rare double-crash scenario, same tradeoff as below).
+  await supabase.from('idempotency_keys').delete().eq('user_id', userId).eq('key', key)
+  const { error: reclaimError } = await supabase
+    .from('idempotency_keys')
+    .insert({ user_id: userId, key, request_hash: requestHash, response: null })
+  if (reclaimError && reclaimError.code !== '23505') throw mapDbError(reclaimError)
+  return undefined
+}
+
 export async function createNote(
   supabase: Client,
   userId: string,
@@ -72,36 +125,8 @@ export async function createNote(
   const requestHash = opts.idempotencyKey ? hashRequest(input) : undefined
 
   if (opts.idempotencyKey && requestHash) {
-    // Claim the key first (unique on (user_id, key), response starts null).
-    // Whichever concurrent request wins this insert is the one that creates
-    // the note; the other gets 23505 and looks up what the winner did.
-    const { error: claimError } = await supabase.from('idempotency_keys').insert({
-      user_id: userId,
-      key: opts.idempotencyKey,
-      request_hash: requestHash,
-      response: null,
-    })
-
-    if (claimError) {
-      if (claimError.code !== '23505') throw mapDbError(claimError)
-
-      const { data: existing } = await supabase
-        .from('idempotency_keys')
-        .select('request_hash, response')
-        .eq('user_id', userId)
-        .eq('key', opts.idempotencyKey)
-        .maybeSingle()
-
-      if (existing?.request_hash !== requestHash) {
-        throw ApiErrors.conflict(
-          'This Idempotency-Key was already used with a different request body.'
-        )
-      }
-      if (existing.response === null) {
-        throw ApiErrors.conflict('A request with this Idempotency-Key is already in progress.')
-      }
-      return existing.response as Note
-    }
+    const existing = await claimIdempotencyKey(supabase, userId, opts.idempotencyKey, requestHash)
+    if (existing) return existing
   }
 
   const { data, error } = await supabase
@@ -110,14 +135,40 @@ export async function createNote(
     .select('id, user_id, title, body, created_at')
     .single()
 
-  if (error) throw mapDbError(error)
+  if (error) {
+    // N-2: without this, a transient failure here (network blip, a
+    // constraint violation) leaves the claimed key permanently at
+    // response=null -- every retry, forever, gets 409 "already in
+    // progress" for a request that never actually completed. Release the
+    // claim so a retry with the same key gets a clean second attempt.
+    if (opts.idempotencyKey) {
+      await supabase
+        .from('idempotency_keys')
+        .delete()
+        .eq('user_id', userId)
+        .eq('key', opts.idempotencyKey)
+    }
+    throw mapDbError(error)
+  }
 
   if (opts.idempotencyKey) {
-    await supabase
+    const { error: updateError } = await supabase
       .from('idempotency_keys')
       .update({ response: data })
       .eq('user_id', userId)
       .eq('key', opts.idempotencyKey)
+    // The note itself was created successfully -- return it to this caller
+    // regardless. But if we failed to record the response, release the
+    // claim too: leaving it at null would strand a future retry the same
+    // way an insert failure would (better a rare duplicate note on retry
+    // than a key stuck in "in progress" forever).
+    if (updateError) {
+      await supabase
+        .from('idempotency_keys')
+        .delete()
+        .eq('user_id', userId)
+        .eq('key', opts.idempotencyKey)
+    }
   }
 
   return data
