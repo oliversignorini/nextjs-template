@@ -1,6 +1,27 @@
 # Profile build evidence -- status
 
-Last updated: 2026-09-27, FACTORY_SLOT=4. **All contract commands verified passing.**
+Last updated: 2026-09-27, FACTORY_SLOT=4, round 1 (review fixes).
+
+## Round 1
+
+Fixed every blocking (B-1 privilege escalation, B-2 OpenAPI spec, B-3
+pagination cursor) and major finding from
+`docs/profiles-build/reviews/next-supabase.md`, plus the minors affecting
+test validity or security. Full list in the PR description. Re-verified on
+slot 4 after the fixes:
+
+- `pnpm lint` / `pnpm typecheck` / `pnpm api:check`: pass
+- `pnpm test:unit`: pass, **11/11**
+- `pnpm test:db` (pgTAP): pass, **18/18** (was 9 -- added generic RLS
+  coverage, per-role tests for `profiles`/`idempotency_keys`/`anon`, and
+  the B-1 regression tests)
+- `pnpm e2e:baseline`: pass, **10/10** (was 5 -- added `/api/v1/me`,
+  idempotency-conflict, self-signup-escalation, magic-link, and
+  pagination-to-the-end cases)
+- Found a real bug while verifying B-1's fix: the Admin API sets
+  `app_metadata` via a follow-up `UPDATE`, not the initial `INSERT`, so
+  the insert-only trigger missed the seeded admin's role. Added a second
+  trigger; see the PR description. **All contract commands verified passing.**
 
 ## Summary
 
