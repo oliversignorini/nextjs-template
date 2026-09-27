@@ -1,9 +1,9 @@
 import 'server-only'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { ApiErrors } from '@/lib/api/errors'
+import { ApiErrors, mapDbError } from '@/lib/api/errors'
+import type { Database } from '@/types/database'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type Client = SupabaseClient<any, any, any>
+type Client = SupabaseClient<Database>
 
 export type Profile = {
   id: string
@@ -18,7 +18,7 @@ export async function getOwnProfile(supabase: Client, userId: string): Promise<P
     .eq('id', userId)
     .maybeSingle()
 
-  if (error) throw ApiErrors.validation(error.message)
+  if (error) throw mapDbError(error)
   if (!data) throw ApiErrors.notFound('Profile')
-  return data as Profile
+  return data
 }
