@@ -1,0 +1,524 @@
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { encodeCursor } from '@/lib/api/pagination'
+import { createNote, listNotes, loadStaleAfterS } from '@/lib/notes/service'
+
+const VALID_ID = '11111111-1111-4111-8111-111111111111'
+
+/** Minimal chainable fake matching the subset of the supabase-js query
+ * builder the service uses. Keeps this suite DB-free (test:unit contract). */
+function fakeSupabase(overrides: { selectResult?: unknown; insertResult?: unknown } = {}) {
+  const notesBuilder = {
+    select: vi.fn(() => notesBuilder),
+    order: vi.fn(() => notesBuilder),
+    limit: vi.fn(() => notesBuilder),
+    or: vi.fn(() => notesBuilder),
+    eq: vi.fn(() => notesBuilder),
+    insert: vi.fn(() => ({
+      select: () => ({
+        single: () => Promise.resolve({ data: overrides.insertResult, error: null }),
+      }),
+    })),
+    then: (resolve: (v: { data: unknown; error: null }) => void) =>
+      resolve({ data: overrides.selectResult ?? [], error: null }),
+  }
+  const idempotencyBuilder = {
+    select: vi.fn(() => idempotencyBuilder),
+    eq: vi.fn(() => idempotencyBuilder),
+    update: vi.fn(() => idempotencyBuilder),
+    maybeSingle: vi.fn(() => Promise.resolve({ data: null, error: null })),
+    insert: vi.fn(() => Promise.resolve({ data: null, error: null })),
+  }
+  return {
+    from: vi.fn((table: string) => (table === 'notes' ? notesBuilder : idempotencyBuilder)),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any
+}
+
+describe('listNotes', () => {
+  it('returns a page with no next_cursor when fewer rows than the limit come back', async () => {
+    const rows = [
+      { id: '1', user_id: 'u1', title: 'a', body: '', created_at: '2026-01-01T00:00:00.000Z' },
+    ]
+    const supabase = fakeSupabase({ selectResult: rows })
+
+    const page = await listNotes(supabase, { limit: 20 })
+
+    expect(page.data).toEqual(rows)
+    expect(page.next_cursor).toBeNull()
+  })
+
+  it('sets next_cursor and trims the extra row when there are more pages', async () => {
+    const rows = Array.from({ length: 3 }, (_, i) => ({
+      id: String(i),
+      user_id: 'u1',
+      title: `note ${i}`,
+      body: '',
+      created_at: `2026-01-0${i + 1}T00:00:00.000Z`,
+    }))
+    const supabase = fakeSupabase({ selectResult: rows })
+
+    const page = await listNotes(supabase, { limit: 2 })
+
+    expect(page.data).toHaveLength(2)
+    expect(page.next_cursor).toBe(encodeCursor(rows[1]!))
+  })
+
+  // m-7 / M-3 regression: the keyset filter must use both created_at *and*
+  // id, not created_at alone (which silently skips tied rows), and the
+  // decoded values must reach the filter unchanged (N-1's validation is
+  // what makes that safe -- see lib/api/pagination.test.ts).
+  it('builds a two-part keyset filter from the decoded cursor', async () => {
+    const supabase = fakeSupabase({ selectResult: [] })
+    const cursor = encodeCursor({ created_at: '2026-01-01T00:00:00.000Z', id: VALID_ID })
+
+    await listNotes(supabase, { limit: 20, cursor })
+
+    const notesBuilder = supabase.from('notes')
+    expect(notesBuilder.or).toHaveBeenCalledWith(
+      `created_at.lt.2026-01-01T00:00:00.000Z,and(created_at.eq.2026-01-01T00:00:00.000Z,id.lt.${VALID_ID})`
+    )
+  })
+})
+
+describe('createNote', () => {
+  it('inserts a note scoped to the acting user', async () => {
+    const created = {
+      id: 'n1',
+      user_id: 'u1',
+      title: 'hi',
+      body: '',
+      created_at: '2026-01-01T00:00:00.000Z',
+    }
+    const supabase = fakeSupabase({ insertResult: created })
+
+    const note = await createNote(supabase, 'u1', { title: 'hi', body: '' })
+
+    expect(note).toEqual(created)
+  })
+
+  it('returns the original note when a claimed Idempotency-Key already has a response', async () => {
+    const existing = {
+      id: 'n1',
+      user_id: 'u1',
+      title: 'hi',
+      body: '',
+      created_at: '2026-01-01T00:00:00.000Z',
+    }
+    const input = { title: 'hi', body: '' }
+    // request_hash must match exactly what the service computes for this
+    // input -- compute it the same way.
+    const { createHash } = await import('node:crypto')
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+
+    const supabase = {
+      from: vi.fn(() => ({
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({ data: { request_hash: hash, response: existing }, error: null }),
+            }),
+          }),
+        }),
+        insert: () => Promise.resolve({ data: null, error: { code: '23505' } }),
+      })),
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    const note = await createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })
+    expect(note).toEqual(existing)
+  })
+
+  it('rejects a reused Idempotency-Key with a different body as a conflict', async () => {
+    const supabase = fakeSupabase()
+    supabase.from = vi.fn((table: string) => {
+      if (table !== 'idempotency_keys') throw new Error('unexpected notes access')
+      return {
+        select: () => ({
+          eq: () => ({
+            eq: () => ({
+              maybeSingle: () =>
+                Promise.resolve({
+                  data: { request_hash: 'different-hash', response: {} },
+                  error: null,
+                }),
+            }),
+          }),
+        }),
+        insert: () => Promise.resolve({ data: null, error: { code: '23505' } }),
+      }
+    })
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 409 })
+  })
+
+  // N-4 regression: losing the atomic reclaim race (another request's
+  // UPDATE already changed the row, so ours matches zero rows) must be a
+  // 409, and must never fall through to creating a note. This is the unit
+  // half of the pgTAP CAS test in supabase/tests/000_rls.test.sql, which
+  // proves the UPDATE...WHERE...RETURNING itself has at most one winner.
+  it('rejects with a conflict when it loses the atomic stale-claim reclaim race, without creating a note', async () => {
+    const input = { title: 'hi', body: '' }
+    const { createHash } = await import('node:crypto')
+    const hash = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+    let notesInsertCalled = false
+
+    const supabase = {
+      rpc: () => Promise.resolve({ data: new Date().toISOString(), error: null }),
+      from: (table: string) => {
+        if (table !== 'idempotency_keys') {
+          notesInsertCalled = true
+          throw new Error('must not attempt to create a note after losing the reclaim race')
+        }
+        return {
+          insert: () => Promise.resolve({ data: null, error: { code: '23505' } }),
+          select: () => ({
+            eq: () => ({
+              eq: () => ({
+                maybeSingle: () =>
+                  Promise.resolve({ data: { request_hash: hash, response: null }, error: null }),
+              }),
+            }),
+          }),
+          update: () => ({
+            eq: () => ({
+              eq: () => ({
+                is: () => ({
+                  lt: () => ({
+                    select: () => ({
+                      // The reclaim UPDATE matched no rows: someone else
+                      // already reclaimed it (or it wasn't actually stale).
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })).rejects.toMatchObject(
+      {
+        status: 409,
+      }
+    )
+    expect(notesInsertCalled).toBe(false)
+  })
+
+  // N-2 regression: a failed create must release its claimed key so a
+  // retry with the same Idempotency-Key can actually succeed, instead of
+  // getting 409 "already in progress" forever.
+  it('releases a claimed Idempotency-Key when the note insert fails, so a retry can succeed', async () => {
+    const idempotencyRows = new Map<string, { request_hash: string; response: unknown }>()
+    const input = { title: 'hi', body: '' }
+    let notesInsertShouldFail = true
+
+    // A chainable stub whose .eq() calls can nest arbitrarily deep (the
+    // real code scopes writes by user_id + key + claim_token), resolving
+    // only once a terminal method is awaited.
+    function eqChain(resolve: () => unknown) {
+      const node = {
+        eq: () => node,
+        select: () => node,
+        maybeSingle: () => Promise.resolve(resolve()),
+        then: (onResolve: (v: unknown) => void) => onResolve(resolve()),
+      }
+      return node
+    }
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: (row: { key: string; request_hash: string; response: unknown }) => {
+              if (idempotencyRows.has(row.key))
+                return Promise.resolve({ data: null, error: { code: '23505' } })
+              idempotencyRows.set(row.key, row)
+              return Promise.resolve({ data: null, error: null })
+            },
+            update: (values: { response: unknown }) =>
+              eqChain(() => {
+                const row = idempotencyRows.get('k1')
+                if (row) row.response = values.response
+                return { data: { claim_token: 'still-mine' }, error: null }
+              }),
+            delete: () =>
+              eqChain(() => {
+                idempotencyRows.delete('k1')
+                return { error: null }
+              }),
+            select: () => eqChain(() => ({ data: idempotencyRows.get('k1') ?? null, error: null })),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () => {
+                if (notesInsertShouldFail)
+                  return Promise.resolve({ data: null, error: { code: '08000' } })
+                return Promise.resolve({
+                  data: {
+                    id: 'n1',
+                    user_id: 'u1',
+                    ...input,
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                })
+              },
+            }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })).rejects.toMatchObject(
+      {
+        status: 500,
+      }
+    )
+    expect(idempotencyRows.has('k1')).toBe(false) // claim released, not stuck
+
+    notesInsertShouldFail = false
+    const note = await createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })
+    expect(note.id).toBe('n1')
+  })
+
+  // N-5 regression: a request that claimed the key cleanly can still lose
+  // ownership *after* it creates its note, if it stalls (still alive, just
+  // slow) past the stale window and a retry reclaims the key first. Its
+  // finalize update (scoped by its own claim_token) then matches zero rows
+  // -- PostgREST reports that as success, not an error, so this must be
+  // checked explicitly. Proves: the orphan note is deleted, and the caller
+  // gets 409 IDEMPOTENCY_CONFLICT instead of a note nobody else can ever
+  // see again (every future replay of this key returns the reclaimer's row).
+  it('deletes its own note and returns 409 IDEMPOTENCY_CONFLICT if it loses claim ownership before finalizing', async () => {
+    const orphanNoteId = 'orphan-note-id'
+    let noteDeleteCalledWith: string | undefined
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // 0 rows: something else now holds this claim_token.
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: orphanNoteId,
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            eq: (column: string, value: string) => {
+              if (column === 'id') noteDeleteCalledWith = value
+              return Promise.resolve({ error: null, count: 1 })
+            },
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' })
+    expect(noteDeleteCalledWith).toBe(orphanNoteId)
+  })
+
+  // m-13 regression: if the compensating delete fails to actually remove
+  // the orphan (0 rows, or an error), the caller must never see a
+  // success-shaped 409 -- that would tell the client "retry and you'll get
+  // the real result" while an orphan note silently survives. It must
+  // surface as a loud 500 instead.
+  it('returns 500 instead of a success-shaped 409 when the compensating delete fails to remove the orphan note', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // 0 rows: lost ownership, same as the N-5 case above.
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'orphan-2',
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            // 0 rows deleted -- the orphan is not actually gone.
+            eq: () => Promise.resolve({ error: null, count: 0 }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 500, code: 'internal_error' })
+  })
+
+  // m-12 regression: before this fix, a failed finalize update released the
+  // claim but left the note this request had already created behind. A
+  // retry then saw an unclaimed key and created a *second* note for the
+  // same Idempotency-Key -- exactly the duplicate idempotency exists to
+  // prevent. Proves: the note this request created is deleted before the
+  // claim is released.
+  it('deletes its own note when the finalize update itself errors, so a retry cannot create a duplicate', async () => {
+    let noteDeleteCalledWith: string | undefined
+    let claimReleased = false
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // The finalize UPDATE itself errors (transient DB
+                      // failure), not a 0-row race.
+                      maybeSingle: () => Promise.resolve({ data: null, error: { code: '08000' } }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+            delete: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => {
+                    claimReleased = true
+                    return Promise.resolve({ error: null })
+                  },
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'orphan-3',
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            eq: (column: string, value: string) => {
+              if (column === 'id') noteDeleteCalledWith = value
+              return Promise.resolve({ error: null, count: 1 })
+            },
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 500 })
+    expect(noteDeleteCalledWith).toBe('orphan-3')
+    expect(claimReleased).toBe(true)
+  })
+})
+
+describe('loadStaleAfterS (m-14)', () => {
+  const ORIGINAL = process.env.IDEMPOTENCY_STALE_AFTER_S
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.IDEMPOTENCY_STALE_AFTER_S
+    else process.env.IDEMPOTENCY_STALE_AFTER_S = ORIGINAL
+  })
+
+  it('defaults to 600 when unset', () => {
+    delete process.env.IDEMPOTENCY_STALE_AFTER_S
+    expect(loadStaleAfterS()).toBe(600)
+  })
+
+  it('defaults to 600 when set to an empty string', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = ''
+    expect(loadStaleAfterS()).toBe(600)
+  })
+
+  it('accepts a valid override at or above the floor', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '800'
+    expect(loadStaleAfterS()).toBe(800)
+  })
+
+  it('rejects a non-numeric value instead of producing NaN', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = 'not-a-number'
+    expect(() => loadStaleAfterS()).toThrow(/IDEMPOTENCY_STALE_AFTER_S/)
+  })
+
+  it('rejects a value below the 360s floor', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '30'
+    expect(() => loadStaleAfterS()).toThrow(/>= 360/)
+  })
+
+  it('rejects a non-integer value', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '600.5'
+    expect(() => loadStaleAfterS()).toThrow()
+  })
+})

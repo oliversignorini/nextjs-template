@@ -1,28 +1,17 @@
-/**
- * Supabase server client.
- *
- * Creates a client for use in Server Components, Server Actions, and Route
- * Handlers. Uses `createServerClient` from `@supabase/ssr` with Next.js
- * `cookies()` for session management. Returns `null` if Supabase is not
- * configured.
- */
-
+import 'server-only'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
-import { isSupabaseConfigured } from '@/lib/env'
+import { env } from '@/lib/env'
+import type { Database } from '@/types/database'
 
-/**
- * Create a Supabase client for use on the server.
- * Returns `null` when Supabase env vars are not configured.
- */
-export function createClient() {
-  if (!isSupabaseConfigured()) return null
+/** Server Component / Server Action / Route Handler client, scoped to the
+ * caller's cookie session. RLS applies to everything queried through it. */
+export async function createClient() {
+  const cookieStore = await cookies()
 
-  const cookieStore = cookies()
-
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+  return createServerClient<Database>(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() {
@@ -30,15 +19,15 @@ export function createClient() {
         },
         setAll(cookiesToSet) {
           try {
-            cookiesToSet.forEach(({ name, value, options }) =>
-              cookieStore.set(name, value, options),
-            )
+            for (const { name, value, options } of cookiesToSet) {
+              cookieStore.set(name, value, options)
+            }
           } catch {
-            // `setAll` can be called from Server Components where cookies
-            // are read-only. The middleware will refresh the session instead.
+            // Called from a Server Component: middleware refreshes the
+            // session instead, so a failed set here is safe to ignore.
           }
         },
       },
-    },
+    }
   )
 }

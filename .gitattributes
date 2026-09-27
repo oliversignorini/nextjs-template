@@ -1,0 +1,4 @@
+# Generated files that api:check byte-compares must never be reformatted
+# by a platform-specific line-ending conversion.
+openapi.json text eol=lf
+types/database.ts text eol=lf

@@ -1,70 +1,29 @@
-/**
- * Root layout — wraps every page in the application.
- *
- * Provides the ThemeProvider (dark mode), QueryProvider (React Query),
- * and the global Header/Footer shell. Uses Open Sans via next/font.
- */
-
 import type { Metadata } from 'next'
-import { Open_Sans } from 'next/font/google'
-import { Header } from '@/components/layout/Header'
-import { Footer } from '@/components/layout/Footer'
-import { QueryProvider } from '@/components/providers/QueryProvider'
-import { ThemeProvider } from '@/components/providers/ThemeProvider'
+import { Geist, Geist_Mono } from 'next/font/google'
 import { Toaster } from '@/components/ui/sonner'
 import './globals.css'
 
-const openSans = Open_Sans({ subsets: ['latin'], weight: ['300', '400', '600', '700'] })
+const geistSans = Geist({
+  variable: '--font-sans',
+  subsets: ['latin'],
+})
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? 'http://localhost:3000'
+const geistMono = Geist_Mono({
+  variable: '--font-mono',
+  subsets: ['latin'],
+})
 
 export const metadata: Metadata = {
-  title: {
-    default: 'App Template',
-    template: '%s | App Template',
-  },
-  description: 'Internal application template',
-  metadataBase: new URL(appUrl),
-  robots: { index: false, follow: false },
-  openGraph: {
-    type: 'website',
-    locale: 'en_US',
-    siteName: 'App Template',
-  },
-  twitter: {
-    card: 'summary_large_image',
-  },
-  alternates: {
-    canonical: appUrl,
-  },
+  title: 'Next + Supabase starter',
+  description: 'software-factory next-supabase-vercel profile skeleton',
 }
 
-export default function RootLayout({
-  children,
-}: Readonly<{
-  children: React.ReactNode
-}>) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
-      <body className={openSans.className}>
-        <a
-          href="#main-content"
-          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-brand-900 focus:px-4 focus:py-2 focus:text-white focus:outline-none"
-        >
-          Skip to main content
-        </a>
-        <ThemeProvider>
-          <QueryProvider>
-            <div className="flex min-h-screen flex-col">
-              <Header />
-              <main id="main-content" className="flex-1">
-                {children}
-              </main>
-              <Footer />
-            </div>
-          </QueryProvider>
-          <Toaster />
-        </ThemeProvider>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col">
+        {children}
+        <Toaster />
       </body>
     </html>
   )

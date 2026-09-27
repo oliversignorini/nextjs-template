@@ -1,0 +1,4 @@
+
+> nextjs-template@0.1.0 typecheck C:\Users\Ollie Signorini\orca\workspaces\nextjs-template\profile-next
+> tsc --noEmit
+

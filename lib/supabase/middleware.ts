@@ -1,56 +1,44 @@
-/**
- * Supabase middleware client.
- *
- * Creates a Supabase client that can refresh auth tokens and write updated
- * session cookies back to the response. Called from the root middleware to
- * keep the session alive on every request.
- */
-
 import { createServerClient } from '@supabase/ssr'
-import { type NextRequest, NextResponse } from 'next/server'
-import { isSupabaseConfigured } from '@/lib/env'
+import { NextResponse, type NextRequest } from 'next/server'
+import { env } from '@/lib/env'
 
-/**
- * Refresh the Supabase session and return a response with updated cookies.
- * Returns the unmodified response when Supabase is not configured.
- */
+/** Refreshes the Supabase session cookie on every request and redirects
+ * unauthenticated visitors away from the protected app shell. */
 export async function updateSession(request: NextRequest) {
-  let supabaseResponse = NextResponse.next({ request })
-
-  if (!isSupabaseConfigured()) return supabaseResponse
+  let response = NextResponse.next({ request })
 
   const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
     {
       cookies: {
         getAll() {
           return request.cookies.getAll()
         },
         setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value }) =>
-            request.cookies.set(name, value),
-          )
-          supabaseResponse = NextResponse.next({ request })
-          cookiesToSet.forEach(({ name, value, options }) =>
-            supabaseResponse.cookies.set(name, value, options),
-          )
+          for (const { name, value } of cookiesToSet) {
+            request.cookies.set(name, value)
+          }
+          response = NextResponse.next({ request })
+          for (const { name, value, options } of cookiesToSet) {
+            response.cookies.set(name, value, options)
+          }
         },
       },
-    },
+    }
   )
 
-  // Refresh the session — this reads and writes cookies as needed
   const {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect /dashboard/* routes — redirect unauthenticated users to home
-  if (!user && request.nextUrl.pathname.startsWith('/dashboard')) {
+  const isProtected = request.nextUrl.pathname.startsWith('/notes')
+  if (!user && isProtected) {
     const url = request.nextUrl.clone()
-    url.pathname = '/'
+    url.pathname = '/login'
+    url.searchParams.set('next', request.nextUrl.pathname)
     return NextResponse.redirect(url)
   }
 
-  return supabaseResponse
+  return response
 }
