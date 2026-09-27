@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { sendMagicLink, signInWithPassword } from '@/app/login/actions'
 
-export function LoginForm() {
+export function LoginForm({ next }: { next?: string }) {
   const [passwordState, passwordAction, passwordPending] = useActionState(
     signInWithPassword,
     undefined
@@ -23,6 +23,7 @@ export function LoginForm() {
       <CardContent>
         <div className="flex flex-col gap-6">
           <form action={passwordAction} className="flex flex-col gap-4">
+            {next ? <input type="hidden" name="next" value={next} /> : null}
             <div className="flex flex-col gap-2">
               <Label htmlFor="email">Email</Label>
               <Input id="email" name="email" type="email" autoComplete="email" required />

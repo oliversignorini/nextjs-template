@@ -13,7 +13,7 @@
 //
 //   env         write .env.local for this slot (does not touch containers)
 //   env:up      render the satellite project, `supabase start`, write .env.local
-//   env:down    `supabase stop` for this slot (keeps the satellite dir + volumes)
+//   env:down    `supabase stop --no-backup` for this slot (deletes its volumes; keeps the satellite dir)
 //   env:reset   env:down, env:up, `supabase db reset`, seed demo users/rows, gen:types
 //   dev         run `next dev` on this slot's port
 //   health      exit 0 when GET /api/health returns 200
@@ -103,9 +103,14 @@ function renderSatellite(s) {
   const dir = satelliteSupabaseDir(s)
   mkdirSync(dir, { recursive: true })
   for (const name of ['migrations', 'seed.sql', 'tests']) {
+    const dest = join(dir, name)
+    // rmSync first: cpSync only overlays, so a migration/test renamed or
+    // deleted in the repo would otherwise keep running in every slot,
+    // silently diverging from the tracked schema.
+    rmSync(dest, { recursive: true, force: true })
     const src = join(ROOT, 'supabase', name)
     if (!existsSync(src)) continue
-    cpSync(src, join(dir, name), { recursive: true })
+    cpSync(src, dest, { recursive: true })
   }
 
   const p = ports(s)
@@ -115,10 +120,15 @@ function renderSatellite(s) {
   toml = toml.replace(/^(\s*(?:port|shadow_port) = )(\d+)$/gm, (m, prefix, port) =>
     remap.has(port) ? `${prefix}${remap.get(port)}` : m
   )
-  toml = toml.replace(/^site_url = ".*"$/m, `site_url = "http://127.0.0.1:${p.WEB_PORT}"`)
+  // Must match NEXT_PUBLIC_APP_URL's host (envVars() below) exactly -- the
+  // browser treats 127.0.0.1 and localhost as different origins, so a
+  // mismatch here breaks the PKCE magic-link flow (GoTrue rejects the
+  // redirect, falls back to site_url, and the code never gets exchanged).
+  const appOrigin = `http://localhost:${p.WEB_PORT}`
+  toml = toml.replace(/^site_url = ".*"$/m, `site_url = "${appOrigin}"`)
   toml = toml.replace(
     /^additional_redirect_urls = \[.*\]$/m,
-    `additional_redirect_urls = ["http://127.0.0.1:${p.WEB_PORT}"]`
+    `additional_redirect_urls = ["${appOrigin}", "${appOrigin}/**"]`
   )
   writeFileSync(join(dir, 'config.toml'), toml)
 
@@ -274,7 +284,10 @@ function cmdEnvDown() {
 }
 
 async function cmdEnvReset() {
-  cmdEnvDown()
+  // `db reset` is the dedicated full-reset operation (drops and re-migrates
+  // regardless of current state) -- env:down + env:up first would migrate
+  // once on the fresh container init and then again here, for nothing.
+  // `start` is a no-op if the stack is already up.
   cmdEnvUp()
   supabase(['db', 'reset'])
   run('pnpm', ['exec', 'tsx', 'scripts/supabase/seed.ts'], { env: envFromFile() })
@@ -297,10 +310,15 @@ function cmdDev() {
   child.on('exit', (code) => code && console.error(`factory: dev exited ${code}`))
 }
 
+/** Requires a real 200 with {db:true} -- `res.ok` alone (any 2xx-3xx) would
+ * pass for a 404/401 from an unrelated app that happens to be on this port,
+ * and AGENTS.md documents 200 as the contract. */
 async function probe(url) {
   try {
     const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-    return res.status < 500
+    if (!res.ok) return false
+    const body = await res.json().catch(() => null)
+    return body?.db === true
   } catch {
     return false
   }

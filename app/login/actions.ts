@@ -3,6 +3,7 @@
 import { redirect } from 'next/navigation'
 import { z } from 'zod'
 import { createClient } from '@/lib/supabase/server'
+import { safeNext } from '@/lib/safe-redirect'
 
 const credentialsSchema = z.object({
   email: z.email(),
@@ -25,7 +26,7 @@ export async function signInWithPassword(
   const { error } = await supabase.auth.signInWithPassword(parsed.data)
   if (error) return { error: error.message }
 
-  redirect('/notes')
+  redirect(safeNext(formData.get('next')?.toString(), '/notes'))
 }
 
 const emailSchema = z.object({ email: z.email() })
