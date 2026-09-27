@@ -67,7 +67,26 @@ function hashRequest(input: CreateNoteInput): string {
 // the process that made it almost certainly crashed or lost its connection
 // before it could record a response -- and is reclaimable instead of
 // rejecting every future retry forever.
-const STALE_CLAIM_MS = 30_000
+//
+// N-5: this must exceed how long a *live* request can possibly still be
+// running, or a reclaim can race a request that is merely slow, not dead --
+// Vercel's function default is 300s, so 600s leaves headroom without
+// configuring maxDuration explicitly. Override via IDEMPOTENCY_STALE_AFTER_S
+// if your deploy target's max duration differs; see AGENTS.md.
+const STALE_AFTER_MS = Number(process.env.IDEMPOTENCY_STALE_AFTER_S ?? 600) * 1000
+
+/** m-11: the reclaim's staleness check and the row's own claimed-at
+ * timestamp must come from the same clock, or a skew between this
+ * instance's clock and the DB's (or another instance's) can make a
+ * *fresh* claim look stale. `created_at` is only ever written by Postgres
+ * itself (a trigger stamps it with `now()` whenever claim_token changes --
+ * see supabase/migrations/20260926100100_notes.sql), so this reads that
+ * same clock via a trivial RPC instead of the app's Date.now(). */
+async function dbNow(supabase: Client): Promise<Date> {
+  const { data, error } = await supabase.rpc('db_now')
+  if (error) throw mapDbError(error)
+  return new Date(data)
+}
 
 type ClaimResult = { done: true; note: Note } | { done: false; token: string }
 
@@ -115,16 +134,14 @@ async function claimIdempotencyKey(
   // In progress and (maybe) stale. Attempt the atomic reclaim directly --
   // its WHERE clause is the real gate, not a separate age check beforehand:
   // that would leave a window between checking and acting for another
-  // request to reclaim first.
-  const staleBefore = new Date(Date.now() - STALE_CLAIM_MS).toISOString()
+  // request to reclaim first. created_at is deliberately not set here: the
+  // touch_idempotency_claim trigger stamps it with the DB's own now() the
+  // moment claim_token changes, so the write side uses the same clock as
+  // the dbNow() read side below.
+  const staleBefore = new Date((await dbNow(supabase)).getTime() - STALE_AFTER_MS).toISOString()
   const { data: reclaimed, error: reclaimError } = await supabase
     .from('idempotency_keys')
-    .update({
-      request_hash: requestHash,
-      response: null,
-      claim_token: token,
-      created_at: new Date().toISOString(),
-    })
+    .update({ request_hash: requestHash, response: null, claim_token: token })
     .eq('user_id', userId)
     .eq('key', key)
     .is('response', null)
@@ -185,24 +202,44 @@ export async function createNote(
   }
 
   if (opts.idempotencyKey && claimToken) {
-    const { error: updateError } = await supabase
+    const { data: finalized, error: updateError } = await supabase
       .from('idempotency_keys')
       .update({ response: data })
       .eq('user_id', userId)
       .eq('key', opts.idempotencyKey)
       .eq('claim_token', claimToken)
-    // The note itself was created successfully -- return it to this caller
-    // regardless. But if we failed to record the response, release our
-    // claim too (same claim_token scoping as above): leaving it at null
-    // would strand a future retry the same way an insert failure would
-    // (better a rare duplicate note on retry than a key stuck forever).
+      .select('claim_token')
+      .maybeSingle()
+
     if (updateError) {
+      // We could still record a response failure; release the claim so a
+      // future retry gets a clean attempt instead of stranding at null
+      // forever (same tradeoff as the insert-failure path above).
       await supabase
         .from('idempotency_keys')
         .delete()
         .eq('user_id', userId)
         .eq('key', opts.idempotencyKey)
         .eq('claim_token', claimToken)
+      throw mapDbError(updateError)
+    }
+
+    // N-5: `.eq('claim_token', claimToken)` matching zero rows means this
+    // request is no longer the owner -- it stalled past STALE_AFTER_MS
+    // (still alive, just slow: a full GC pause, a starved connection pool,
+    // a slow upstream) and a retry already reclaimed the key and created
+    // its own note under a new token. Without this check, PostgREST's
+    // silent 0-row update would let this stale-but-live request return its
+    // own note anyway: two notes for one key, and every future replay of
+    // this Idempotency-Key would return the *other* one. There is no
+    // multi-table transaction available from the service layer without an
+    // RPC (which the architecture rule reserves for infra, not business
+    // logic, and this is the create path, not infra) -- compensate instead:
+    // delete the orphan note this request just created and surface the
+    // conflict so the caller's retry reads the actual winner.
+    if (!finalized) {
+      await supabase.from('notes').delete().eq('id', data.id)
+      throw ApiErrors.idempotencyLost()
     }
   }
 

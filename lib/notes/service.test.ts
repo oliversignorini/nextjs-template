@@ -166,6 +166,7 @@ describe('createNote', () => {
     let notesInsertCalled = false
 
     const supabase = {
+      rpc: () => Promise.resolve({ data: new Date().toISOString(), error: null }),
       from: (table: string) => {
         if (table !== 'idempotency_keys') {
           notesInsertCalled = true
@@ -223,6 +224,7 @@ describe('createNote', () => {
     function eqChain(resolve: () => unknown) {
       const node = {
         eq: () => node,
+        select: () => node,
         maybeSingle: () => Promise.resolve(resolve()),
         then: (onResolve: (v: unknown) => void) => onResolve(resolve()),
       }
@@ -243,7 +245,7 @@ describe('createNote', () => {
               eqChain(() => {
                 const row = idempotencyRows.get('k1')
                 if (row) row.response = values.response
-                return { error: null }
+                return { data: { claim_token: 'still-mine' }, error: null }
               }),
             delete: () =>
               eqChain(() => {
@@ -286,5 +288,69 @@ describe('createNote', () => {
     notesInsertShouldFail = false
     const note = await createNote(supabase, 'u1', input, { idempotencyKey: 'k1' })
     expect(note.id).toBe('n1')
+  })
+
+  // N-5 regression: a request that claimed the key cleanly can still lose
+  // ownership *after* it creates its note, if it stalls (still alive, just
+  // slow) past the stale window and a retry reclaims the key first. Its
+  // finalize update (scoped by its own claim_token) then matches zero rows
+  // -- PostgREST reports that as success, not an error, so this must be
+  // checked explicitly. Proves: the orphan note is deleted, and the caller
+  // gets 409 IDEMPOTENCY_CONFLICT instead of a note nobody else can ever
+  // see again (every future replay of this key returns the reclaimer's row).
+  it('deletes its own note and returns 409 IDEMPOTENCY_CONFLICT if it loses claim ownership before finalizing', async () => {
+    const orphanNoteId = 'orphan-note-id'
+    let noteDeleteCalledWith: string | undefined
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // 0 rows: something else now holds this claim_token.
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: orphanNoteId,
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            eq: (column: string, value: string) => {
+              if (column === 'id') noteDeleteCalledWith = value
+              return Promise.resolve({ error: null })
+            },
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' })
+    expect(noteDeleteCalledWith).toBe(orphanNoteId)
   })
 })

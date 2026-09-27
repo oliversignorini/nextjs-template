@@ -80,3 +80,42 @@ create policy "idempotency_keys_own" on public.idempotency_keys
   to authenticated
   using (user_id = (select auth.uid()))
   with check (user_id = (select auth.uid()));
+
+-- N-5/m-11: the reclaim's staleness check and the reclaim's own write must
+-- use the same clock. The *write* side is handled here: whenever a claim is
+-- reassigned (claim_token changes -- an initial insert or a reclaim),
+-- created_at is stamped with the DB's own now(), never a value the app
+-- computed. lib/notes/service.ts's *read* side (the `created_at < threshold`
+-- staleness check) gets the DB's now() via db_now() below instead of
+-- process.env/Date.now(), so the two never drift against each other the way
+-- an app-clock skew across instances could.
+create function public.touch_idempotency_claim()
+returns trigger
+language plpgsql
+set search_path = ''
+as $$
+begin
+  if new.claim_token is distinct from old.claim_token then
+    new.created_at = now();
+  end if;
+  return new;
+end;
+$$;
+
+create trigger idempotency_keys_touch_claim
+  before update on public.idempotency_keys
+  for each row execute function public.touch_idempotency_claim();
+
+-- A clock getter, not business logic: lib/notes/service.ts calls this
+-- instead of the app's Date.now() so every instance computes staleness
+-- against the same clock the row's created_at was actually stamped with.
+create function public.db_now()
+returns timestamptz
+language sql
+stable
+as $$
+  select now()
+$$;
+
+revoke execute on function public.db_now() from public, anon;
+grant execute on function public.db_now() to authenticated;

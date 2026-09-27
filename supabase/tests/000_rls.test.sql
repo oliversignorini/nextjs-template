@@ -1,5 +1,5 @@
 begin;
-select plan(21);
+select plan(26);
 
 -- Generic, table-agnostic: a new table that ships without RLS enabled or
 -- without a policy fails this immediately, instead of silently passing a
@@ -225,6 +225,109 @@ select is(
   (select n from reclaim_attempt_2),
   0,
   'a second reclaim attempt immediately after the first gets zero rows -- it lost the race, not a duplicate win'
+);
+reset role;
+
+-- N-5 regression: a slow-but-alive original creating its note *after* a
+-- retry has already reclaimed and finalized the same key must not leave two
+-- notes behind. This exercises exactly the sequence lib/notes/service.ts
+-- runs: original claims (token1) -> stalls -> retry reclaims (token2, CAS
+-- proven above) -> retry creates its note and finalizes cleanly -> original
+-- finally creates its own note and tries to finalize with token1, which now
+-- matches zero rows (touch_idempotency_claim already moved created_at/
+-- claim_token to the retry's reclaim) -- the service compensates by
+-- deleting the note the original just created. Proves (a) the stalled
+-- original's note does not survive, (b) exactly one note exists for the
+-- key's user afterward, and its id is the retry's. ((c) -- the loser
+-- observing 409 IDEMPOTENCY_CONFLICT and a subsequent replay reading the
+-- winner's stored response -- is exercised at the service layer in
+-- lib/notes/service.test.ts, since a live app-clock RPC call and the
+-- ApiError mapping are not observable from pgSQL alone.)
+set local role authenticated;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222"}';
+
+-- Original O claims the key (token1), then stalls past the stale window.
+insert into public.idempotency_keys (user_id, key, request_hash, response, claim_token, created_at)
+values (
+  '22222222-2222-2222-2222-222222222222',
+  'n5-key',
+  'h1',
+  null,
+  '99999999-9999-9999-9999-999999999991',
+  now() - interval '1 minute'
+);
+
+-- Retry R reclaims the stale claim (token2) -- the same CAS proven above.
+create temporary table n5_reclaim as
+with reclaim as (
+  update public.idempotency_keys
+  set request_hash = 'h1', response = null, claim_token = '99999999-9999-9999-9999-999999999992', created_at = now()
+  where user_id = '22222222-2222-2222-2222-222222222222'
+    and key = 'n5-key'
+    and response is null
+    and created_at < now() - interval '30 seconds'
+  returning claim_token
+)
+select count(*)::int as n from reclaim;
+
+select is((select n from n5_reclaim), 1, 'N-5: retry reclaims the stale claim while the original is still stalled');
+
+-- R creates note B and finalizes cleanly under token2.
+insert into public.notes (user_id, title, body)
+values ('22222222-2222-2222-2222-222222222222', 'n5-note-b', '')
+returning id as note_b_id \gset n5_
+
+create temporary table n5_finalize_retry as
+with fin as (
+  update public.idempotency_keys
+  set response = jsonb_build_object('id', :'n5_note_b_id')
+  where user_id = '22222222-2222-2222-2222-222222222222'
+    and key = 'n5-key'
+    and claim_token = '99999999-9999-9999-9999-999999999992'
+  returning claim_token
+)
+select count(*)::int as n from fin;
+
+select is((select n from n5_finalize_retry), 1, 'N-5: retry finalizes cleanly (still owns the reclaimed token)');
+
+-- O finally resumes: it (unconditionally) creates its own note A, then
+-- tries to finalize with its now-stale token1.
+insert into public.notes (user_id, title, body)
+values ('22222222-2222-2222-2222-222222222222', 'n5-note-a', '')
+returning id as note_a_id \gset n5_
+
+create temporary table n5_finalize_original as
+with fin as (
+  update public.idempotency_keys
+  set response = jsonb_build_object('id', :'n5_note_a_id')
+  where user_id = '22222222-2222-2222-2222-222222222222'
+    and key = 'n5-key'
+    and claim_token = '99999999-9999-9999-9999-999999999991'
+  returning claim_token
+)
+select count(*)::int as n from fin;
+
+select is(
+  (select n from n5_finalize_original),
+  0,
+  'N-5: the stalled original''s finalize matches zero rows -- it lost ownership to the reclaim'
+);
+
+-- The service compensates for that 0-row finalize by deleting the orphan
+-- note it just created (note A), never returning it and never leaving two
+-- notes for one key.
+delete from public.notes where id = :'n5_note_a_id';
+
+select is(
+  (select count(*)::int from public.notes where id in (:'n5_note_a_id', :'n5_note_b_id')),
+  1,
+  'N-5: exactly one note survives for this key -- the retry''s, not the stalled original''s'
+);
+
+select is(
+  (select id from public.notes where id = :'n5_note_b_id'),
+  :'n5_note_b_id',
+  'N-5: the surviving note is the reclaiming retry''s note'
 );
 reset role;
 

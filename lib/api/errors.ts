@@ -39,6 +39,16 @@ export const ApiErrors = {
   validation: (message: string, field?: string) =>
     new ApiError(422, 'validation_error', message, field),
   conflict: (message: string) => new ApiError(409, 'conflict', message),
+  // N-5: this attempt's Idempotency-Key claim was reclaimed by a concurrent
+  // retry while this request was still (slowly) alive -- its own note has
+  // already been deleted to compensate. The caller should retry the same
+  // request; the retry will read the reclaiming request's stored response.
+  idempotencyLost: () =>
+    new ApiError(
+      409,
+      'IDEMPOTENCY_CONFLICT',
+      'This request lost ownership of its Idempotency-Key to a concurrent retry. Retry the request.'
+    ),
 }
 
 type PostgrestLikeError = { code?: string | null; message: string }

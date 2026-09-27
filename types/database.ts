@@ -107,6 +107,7 @@ export type Database = {
         Args: { meta: Json }
         Returns: Database['public']['Enums']['app_role']
       }
+      db_now: { Args: Record<PropertyKey, never>; Returns: string }
     }
     Enums: {
       app_role: 'admin' | 'member'
