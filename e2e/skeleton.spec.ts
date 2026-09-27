@@ -28,5 +28,8 @@ test('@baseline member can sign in, create a note, and sign out', async ({ page 
 test("@rls-negative a member cannot see another member's note in the UI", async ({ page }) => {
   await login(page, 'member2@demo.test')
   await expect(page).toHaveURL(/\/notes/)
+  // Assert the list actually rendered before asserting absence -- otherwise
+  // "not visible" passes vacuously while the page is still loading.
+  await expect(page.getByTestId('notes-list')).toBeVisible()
   await expect(page.getByText('Welcome')).not.toBeVisible()
 })

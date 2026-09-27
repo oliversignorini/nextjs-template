@@ -30,6 +30,37 @@ const eslintConfig = defineConfig([
       'shadcn/require-static-classes': 'error',
     },
   },
+  // API-first guard: no client-side Supabase data access. Everything goes
+  // through a service function, called from a Server Component/Action
+  // (cookie session) or app/api/v1 (cookie or Bearer) -- see AGENTS.md.
+  {
+    files: ['**/*.{js,jsx,ts,tsx}'],
+    // The only sanctioned callers of the Supabase SDKs directly: the client
+    // factories themselves, the API-auth helper that builds a bearer-scoped
+    // client, every service.ts (typed on SupabaseClient<Database>, but the
+    // client itself is always passed in, never created), and the seed
+    // script (runs outside the app, over the Admin API).
+    ignores: ['lib/supabase/**', 'lib/api/auth.ts', 'lib/*/service.ts', 'scripts/**'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          paths: [
+            {
+              name: '@supabase/supabase-js',
+              message:
+                'No client-side Supabase access. Add/extend a lib/<domain>/service.ts instead.',
+            },
+            {
+              name: '@supabase/ssr',
+              message:
+                'No client-side Supabase access. Add/extend a lib/<domain>/service.ts instead.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 ])
 
 export default eslintConfig

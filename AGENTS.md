@@ -23,8 +23,27 @@ versioned HTTP API always has parity with the UI.
   `schemas.ts` (`pnpm api:generate`). `pnpm api:check` fails on drift; it
   runs in CI. Regenerate and commit, don't hand-edit `openapi.json`.
 - Error shape is always `{ "error": { "code", "message", "field?" } }`
-  (`lib/api/errors.ts`). List endpoints use cursor pagination
-  (`lib/api/pagination.ts`). Creates accept an `Idempotency-Key` header.
+  (`lib/api/errors.ts`, `mapDbError()` for Postgres/PostgREST errors --
+  never forward a raw DB message to a caller). List endpoints use cursor
+  pagination (`lib/api/pagination.ts` -- the cursor is an opaque
+  base64url token, treat it as such, never parse it). Creates accept an
+  `Idempotency-Key` header, scoped per user with a request-body hash: a
+  reused key with the same body returns the original result, a reused key
+  with a different body is `409`.
+
+### Adding a new API resource
+
+1. `lib/<domain>/schemas.ts` -- zod shapes, `registry.register(...)` each one.
+2. `lib/<domain>/service.ts` -- the actual logic, typed `SupabaseClient<Database>`.
+3. `app/api/v1/<resource>/openapi.ts` -- `registry.registerPath(...)` for
+   every method this resource exposes. **Required**, not optional:
+   `pnpm api:check` greps every `route.ts` for its exported HTTP methods and
+   fails the build if one isn't registered here.
+4. `app/api/v1/<resource>/route.ts` -- thin handler, `import './openapi'` at
+   the top, calls the service function.
+5. `pnpm api:generate` to write `openapi.json`, commit it.
+6. A Server Component/Action calling the same service function (API-first
+   parity), a pgTAP test for the table's RLS, and an `e2e:baseline` case.
 
 ## Per-domain file shape
 
@@ -40,8 +59,24 @@ copy its shape, not its content.
 
 ## Data & access control
 
-- Every table has RLS enabled, no exceptions (`supabase/tests/*.test.sql`
-  asserts this and exercises per-role access).
+- Every table has RLS enabled, no exceptions -- `supabase/tests/000_rls.test.sql`
+  asserts this **generically** (queries `pg_tables`/`pg_policies` directly,
+  so a new table with no RLS or no policy fails automatically) and exercises
+  per-role access for `profiles`, `notes`, `idempotency_keys` and `anon`.
+- **Role source of truth: `auth.users.raw_app_meta_data`, never
+  `raw_user_meta_data`.** `user_metadata` (the `data` field of a public
+  `signUp()`/`signInWithOtp()` call) is client-controlled with only the anon
+  key -- trusting it for role/permission decisions is a privilege-escalation
+  hole (this profile's B-1 finding, round 1). `app_metadata` can only be set
+  by the service role (the Admin API), which is what `scripts/supabase/seed.ts`
+  uses. `handle_new_user()` in `supabase/migrations/20260926100000_profiles.sql`
+  reads `raw_app_meta_data ->> 'role'`; keep it that way, and keep the pgTAP
+  regression test (a user with `user_metadata.role=admin` must get `member`).
+- `profiles` has no update/insert/delete policy: there is no user-editable
+  profile field in this skeleton (email mirrors `auth.users`, role is
+  admin-only), so there is no legitimate self-service write to allow. A
+  future app that adds one (e.g. a display name) should add a
+  narrowly-scoped policy for that column, not reopen this one.
 - `supabase/migrations/` holds every schema change, timestamped filenames
   (`supabase db reset` order depends on it). `supabase/seed.sql` is
   schema-level seed data only; demo _users_ are created via the Admin API
@@ -51,8 +86,8 @@ copy its shape, not its content.
   (also runs automatically as the last step of `env:reset`).
 - Migration-safety review: whenever `supabase/migrations/` changes, treat it
   like a production schema change -- no destructive change without a plan
-  for existing data, no missing `down` story (Supabase migrations are
-  forward-only here, so get the `up` right).
+  for existing data. Supabase migrations are forward-only here (no `down`
+  file), so get the `up` right the first time.
 - `supabase/config.toml` only enables Postgres, Auth and Mailpit (`api`,
   `db`, `auth`, `local_smtp`, `studio`) -- this profile's contract.
   `storage`, `realtime`, `analytics` and `edge_runtime` are disabled: they
@@ -91,13 +126,13 @@ raw ones, because every command is scoped to the worktree's `FACTORY_SLOT`.
 | `pnpm env:up` / `env:down` | Start / stop this slot's local Supabase stack (`.factory/supabase-s<slot>/`)  |
 | `pnpm env:reset`           | Fresh DB: stop, start, `supabase db reset`, seed demo users + rows, gen types |
 | `pnpm dev:slot`            | `next dev` on this slot's port                                                |
-| `pnpm health`              | Exit 0 when `GET /api/health` on this slot returns 200                        |
+| `pnpm health`              | Exit 0 when `GET /api/health` on this slot returns 200 with `{db:true}`       |
 | `pnpm lint`                | ESLint (incl. `@shadcn/lint`) + Prettier check                                |
 | `pnpm typecheck`           | `tsc --noEmit`                                                                |
 | `pnpm test:unit`           | Vitest, DB-free (mocked Supabase clients)                                     |
 | `pnpm test:db`             | `supabase test db` -- pgTAP: RLS-enabled + per-role access on every table     |
 | `pnpm e2e`                 | Playwright against this slot (starts `dev:slot` if it isn't running)          |
-| `pnpm e2e:baseline`        | The e2e specs CI runs: `skeleton.spec.ts` + `api.spec.ts`                     |
+| `pnpm e2e:baseline`        | The e2e specs CI runs: skeleton, API-only, magic-link, pagination             |
 | `pnpm design:check`        | impeccable design detector over `app` and `components`                        |
 | `pnpm api:check`           | Regenerate `openapi.json` and fail on drift                                   |
 
@@ -108,6 +143,22 @@ whole stack lives in a per-slot satellite dir (`.factory/supabase-s<slot>/`,
 gitignored) so two slots never share a container, volume or port. The
 generated `.env.local` carries a `managed-by` header; never hand-edit it --
 move it aside and re-run `pnpm env:up` if you need to.
+
+**Factory workflow.** isolate (`FACTORY_SLOT` + `pnpm env:up`) -> build the
+slice -> checks (`lint` -> `typecheck` -> `test:unit` -> `api:check` ->
+`test:db` -> `e2e:baseline`, in that order -- the first failure stops the
+run) -> proof (evidence in `findings/_evidence/`) -> PR. Never work on `main`
+directly; never skip a hook.
+
+**Auth redirects.** `site_url`/`additional_redirect_urls` in
+`supabase/config.toml` are rendered per-slot to match
+`NEXT_PUBLIC_APP_URL`'s host exactly (`localhost`, not `127.0.0.1` --
+browsers treat them as different origins, which silently breaks the magic
+link's PKCE exchange). `lib/safe-redirect.ts`'s `safeNext()` is the only
+way a `next`/`redirect` query or form value may reach a `Response.redirect`
+or `redirect()` call: it accepts only same-origin relative paths (`/foo`,
+never `//foo` or an absolute URL) and is what stands between `/auth/callback`
+and an open redirect. Reuse it; don't hand-roll another `${origin}${next}`.
 
 **Demo data.** `pnpm env:reset` seeds three users, password
 `demo-password-123`: `admin@demo.test` (role `admin`), `member@demo.test`

@@ -30,19 +30,22 @@ export type Database = {
         Row: {
           created_at: string
           key: string
-          response: NonNullable<Json>
+          request_hash: string
+          response: Json | null
           user_id: string
         }
         Insert: {
           created_at?: string
           key: string
-          response: NonNullable<Json>
+          request_hash: string
+          response?: Json | null
           user_id: string
         }
         Update: {
           created_at?: string
           key?: string
-          response?: NonNullable<Json>
+          request_hash?: string
+          response?: Json | null
           user_id?: string
         }
         Relationships: []
