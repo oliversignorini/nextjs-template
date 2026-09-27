@@ -53,3 +53,29 @@ $$;
 create trigger on_auth_user_created
   after insert on auth.users
   for each row execute function public.handle_new_user();
+
+-- The Admin API's createUser/updateUserById do not set app_metadata in the
+-- same statement as the INSERT: they insert the row first (app_metadata is
+-- just {provider, providers}), then UPDATE it to merge in the caller's
+-- app_metadata. An insert-only trigger reads the pre-update state and never
+-- sees the role. This trigger keeps profiles.role in sync whenever
+-- app_metadata changes -- at signup, when scripts/supabase/seed.ts creates
+-- a demo user, and if an app later promotes/demotes a user with
+-- admin.updateUserById({app_metadata:{role}}).
+create function public.handle_user_role_sync()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  update public.profiles
+  set role = coalesce(new.raw_app_meta_data ->> 'role', 'member')::public.app_role
+  where id = new.id;
+  return new;
+end;
+$$;
+
+create trigger on_auth_user_app_metadata_updated
+  after update of raw_app_meta_data on auth.users
+  for each row execute function public.handle_user_role_sync();

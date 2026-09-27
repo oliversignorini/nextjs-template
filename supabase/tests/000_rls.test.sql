@@ -1,5 +1,5 @@
 begin;
-select plan(17);
+select plan(18);
 
 -- Generic, table-agnostic: a new table that ships without RLS enabled or
 -- without a policy fails this immediately, instead of silently passing a
@@ -42,6 +42,20 @@ values
   ('00000000-0000-0000-0000-000000000000', '22222222-2222-2222-2222-222222222222', 'authenticated', 'authenticated', 'member1@pgtap.local', 'x', now(), '{"role":"member"}', '{}', now(), now()),
   ('00000000-0000-0000-0000-000000000000', '33333333-3333-3333-3333-333333333333', 'authenticated', 'authenticated', 'member2@pgtap.local', 'x', now(), '{"role":"member"}', '{}', now(), now()),
   ('00000000-0000-0000-0000-000000000000', '44444444-4444-4444-4444-444444444444', 'authenticated', 'authenticated', 'escalator@pgtap.local', 'x', now(), '{}', '{"role":"admin"}', now(), now());
+
+-- Regression: the Admin API's createUser/updateUserById insert the row
+-- first (app_metadata is just {provider,providers}) and only merge in the
+-- caller's app_metadata via a separate UPDATE -- this is exactly how
+-- scripts/supabase/seed.ts creates admin@demo.test. An insert-only trigger
+-- reads the pre-update state and never sees the role.
+insert into auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, raw_app_meta_data, raw_user_meta_data, created_at, updated_at)
+values ('00000000-0000-0000-0000-000000000000', '66666666-6666-6666-6666-666666666666', 'authenticated', 'authenticated', 'two-step-admin@pgtap.local', 'x', now(), '{}', '{}', now(), now());
+update auth.users set raw_app_meta_data = '{"role":"admin"}' where id = '66666666-6666-6666-6666-666666666666';
+select is(
+  (select role::text from public.profiles where id = '66666666-6666-6666-6666-666666666666'),
+  'admin',
+  'app_metadata set via a later UPDATE (as the Admin API does) still lands in profiles.role'
+);
 
 -- B-1 regression: a client can only ever set user_metadata (the anon key,
 -- signUp's options.data). If the trigger ever reads raw_user_meta_data
