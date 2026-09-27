@@ -2,10 +2,21 @@ begin;
 select plan(9);
 
 -- Every table in this profile must have RLS enabled (build contract gate 4,
--- item 5, "access control").
-select row_security_is_enabled('public', 'profiles', 'profiles has RLS enabled');
-select row_security_is_enabled('public', 'notes', 'notes has RLS enabled');
-select row_security_is_enabled('public', 'idempotency_keys', 'idempotency_keys has RLS enabled');
+-- item 5, "access control"). pgTAP has no built-in row_security_is_enabled;
+-- pg_class.relrowsecurity is the source of truth `ALTER TABLE ... ENABLE
+-- ROW LEVEL SECURITY` sets.
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.profiles'::regclass),
+  'profiles has RLS enabled'
+);
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.notes'::regclass),
+  'notes has RLS enabled'
+);
+select ok(
+  (select relrowsecurity from pg_class where oid = 'public.idempotency_keys'::regclass),
+  'idempotency_keys has RLS enabled'
+);
 
 -- Three test users: one admin, two members. Bypasses GoTrue entirely --
 -- this only needs auth.users to exist so the profiles trigger fires and
