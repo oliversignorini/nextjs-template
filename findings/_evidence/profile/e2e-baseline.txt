@@ -1,0 +1,10 @@
+
+Running 5 tests using 1 worker
+
+  ok 1 [chromium] › e2e\api.spec.ts:20:7 › @baseline notes API (no browser) › member can create, list and delete their own note over HTTP (355ms)
+  ok 2 [chromium] › e2e\api.spec.ts:44:7 › @baseline notes API (no browser) › idempotency key returns the same note instead of creating a duplicate (243ms)
+  ok 3 [chromium] › e2e\api.spec.ts:65:7 › @baseline notes API (no browser) › @rls-negative a different role cannot modify another user's note (408ms)
+  ok 4 [chromium] › e2e\skeleton.spec.ts:14:5 › @baseline member can sign in, create a note, and sign out (1.8s)
+  ok 5 [chromium] › e2e\skeleton.spec.ts:28:5 › @rls-negative a member cannot see another member's note in the UI (696ms)
+
+  5 passed (5.1s)
