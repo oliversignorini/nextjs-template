@@ -1,6 +1,7 @@
 import 'server-only'
 import { createHash, randomUUID } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { z } from 'zod'
 import { ApiErrors, mapDbError } from '@/lib/api/errors'
 import { decodeCursor, encodeCursor, type Page, type PaginationQuery } from '@/lib/api/pagination'
 import type { CreateNoteInput, Note } from '@/lib/notes/schemas'
@@ -73,7 +74,42 @@ function hashRequest(input: CreateNoteInput): string {
 // Vercel's function default is 300s, so 600s leaves headroom without
 // configuring maxDuration explicitly. Override via IDEMPOTENCY_STALE_AFTER_S
 // if your deploy target's max duration differs; see AGENTS.md.
-const STALE_AFTER_MS = Number(process.env.IDEMPOTENCY_STALE_AFTER_S ?? 600) * 1000
+//
+// m-14: an unvalidated env var here is dangerous in two specific ways --
+// a non-numeric value produces NaN, and `new Date(NaN).toISOString()` in
+// the reclaim path throws (every reclaim attempt 500s); an empty string
+// coerces to 0, which makes every in-flight claim reclaimable immediately
+// and reopens N-5 (a live request gets reclaimed out from under itself).
+// Validate at module load and fail fast with a clear error instead of
+// letting either failure mode surface only under concurrent load.
+const staleAfterSSchema = z
+  .string()
+  .trim()
+  .optional()
+  .transform((v) => (v === undefined || v === '' ? 600 : Number(v)))
+  .pipe(
+    z
+      .number()
+      .int()
+      .min(
+        360,
+        'IDEMPOTENCY_STALE_AFTER_S must be an integer >= 360 (above the max request duration)'
+      )
+  )
+
+/** Exported for unit testing the validation directly against arbitrary env
+ * values; the module-level STALE_AFTER_MS below is what the service uses. */
+export function loadStaleAfterS(): number {
+  const result = staleAfterSSchema.safeParse(process.env.IDEMPOTENCY_STALE_AFTER_S)
+  if (!result.success) {
+    throw new Error(
+      `Invalid IDEMPOTENCY_STALE_AFTER_S=${JSON.stringify(process.env.IDEMPOTENCY_STALE_AFTER_S)}: ${result.error.issues[0]?.message}`
+    )
+  }
+  return result.data
+}
+
+const STALE_AFTER_MS = loadStaleAfterS() * 1000
 
 /** m-11: the reclaim's staleness check and the row's own claimed-at
  * timestamp must come from the same clock, or a skew between this
@@ -86,6 +122,20 @@ async function dbNow(supabase: Client): Promise<Date> {
   const { data, error } = await supabase.rpc('db_now')
   if (error) throw mapDbError(error)
   return new Date(data)
+}
+
+/** m-13: a compensating delete that silently no-ops (0 rows, RLS or a
+ * concurrent delete) or errors would leave an orphan note behind while the
+ * caller believes cleanup succeeded. Log it so an operator can find the
+ * row, and let the caller decide how to fail instead of ever reporting
+ * success (or a success-shaped 409) over an orphan that is still there. */
+async function deleteOrphanNote(supabase: Client, noteId: string): Promise<boolean> {
+  const { error, count } = await supabase.from('notes').delete({ count: 'exact' }).eq('id', noteId)
+  if (error || !count) {
+    console.error('failed to delete orphan note after a lost idempotency claim', { noteId, error })
+    return false
+  }
+  return true
 }
 
 type ClaimResult = { done: true; note: Note } | { done: false; token: string }
@@ -212,15 +262,23 @@ export async function createNote(
       .maybeSingle()
 
     if (updateError) {
-      // We could still record a response failure; release the claim so a
-      // future retry gets a clean attempt instead of stranding at null
-      // forever (same tradeoff as the insert-failure path above).
+      // m-12: this request's note (`data`) was already created; if we only
+      // release the claim and not the note, a retry sees an unclaimed key,
+      // creates a *second* note, and both survive -- exactly the duplicate
+      // idempotency is supposed to prevent. Delete it before releasing the
+      // claim so the two writes can't leak independently of each other.
+      const deleted = await deleteOrphanNote(supabase, data.id)
       await supabase
         .from('idempotency_keys')
         .delete()
         .eq('user_id', userId)
         .eq('key', opts.idempotencyKey)
         .eq('claim_token', claimToken)
+      if (!deleted) {
+        throw ApiErrors.internal(
+          'Failed to clean up after a failed idempotency finalize; see server logs.'
+        )
+      }
       throw mapDbError(updateError)
     }
 
@@ -238,7 +296,16 @@ export async function createNote(
     // delete the orphan note this request just created and surface the
     // conflict so the caller's retry reads the actual winner.
     if (!finalized) {
-      await supabase.from('notes').delete().eq('id', data.id)
+      const deleted = await deleteOrphanNote(supabase, data.id)
+      if (!deleted) {
+        // m-13: an orphan we failed to remove is worse than a 409 --
+        // returning IDEMPOTENCY_CONFLICT here would tell the caller "retry
+        // and you'll get the real result", but the orphan note (and the
+        // fact that cleanup itself failed) needs an operator, not a retry.
+        throw ApiErrors.internal(
+          'Failed to compensate for a lost idempotency claim; see server logs.'
+        )
+      }
       throw ApiErrors.idempotencyLost()
     }
   }

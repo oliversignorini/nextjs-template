@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { encodeCursor } from '@/lib/api/pagination'
-import { createNote, listNotes } from '@/lib/notes/service'
+import { createNote, listNotes, loadStaleAfterS } from '@/lib/notes/service'
 
 const VALID_ID = '11111111-1111-4111-8111-111111111111'
 
@@ -340,7 +340,7 @@ describe('createNote', () => {
           delete: () => ({
             eq: (column: string, value: string) => {
               if (column === 'id') noteDeleteCalledWith = value
-              return Promise.resolve({ error: null })
+              return Promise.resolve({ error: null, count: 1 })
             },
           }),
         }
@@ -352,5 +352,173 @@ describe('createNote', () => {
       createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
     ).rejects.toMatchObject({ status: 409, code: 'IDEMPOTENCY_CONFLICT' })
     expect(noteDeleteCalledWith).toBe(orphanNoteId)
+  })
+
+  // m-13 regression: if the compensating delete fails to actually remove
+  // the orphan (0 rows, or an error), the caller must never see a
+  // success-shaped 409 -- that would tell the client "retry and you'll get
+  // the real result" while an orphan note silently survives. It must
+  // surface as a loud 500 instead.
+  it('returns 500 instead of a success-shaped 409 when the compensating delete fails to remove the orphan note', async () => {
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // 0 rows: lost ownership, same as the N-5 case above.
+                      maybeSingle: () => Promise.resolve({ data: null, error: null }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'orphan-2',
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            // 0 rows deleted -- the orphan is not actually gone.
+            eq: () => Promise.resolve({ error: null, count: 0 }),
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 500, code: 'internal_error' })
+  })
+
+  // m-12 regression: before this fix, a failed finalize update released the
+  // claim but left the note this request had already created behind. A
+  // retry then saw an unclaimed key and created a *second* note for the
+  // same Idempotency-Key -- exactly the duplicate idempotency exists to
+  // prevent. Proves: the note this request created is deleted before the
+  // claim is released.
+  it('deletes its own note when the finalize update itself errors, so a retry cannot create a duplicate', async () => {
+    let noteDeleteCalledWith: string | undefined
+    let claimReleased = false
+
+    const supabase = {
+      from: (table: string) => {
+        if (table === 'idempotency_keys') {
+          return {
+            insert: () => Promise.resolve({ data: null, error: null }), // claims cleanly
+            update: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => ({
+                    select: () => ({
+                      // The finalize UPDATE itself errors (transient DB
+                      // failure), not a 0-row race.
+                      maybeSingle: () => Promise.resolve({ data: null, error: { code: '08000' } }),
+                    }),
+                  }),
+                }),
+              }),
+            }),
+            delete: () => ({
+              eq: () => ({
+                eq: () => ({
+                  eq: () => {
+                    claimReleased = true
+                    return Promise.resolve({ error: null })
+                  },
+                }),
+              }),
+            }),
+          }
+        }
+        return {
+          insert: () => ({
+            select: () => ({
+              single: () =>
+                Promise.resolve({
+                  data: {
+                    id: 'orphan-3',
+                    user_id: 'u1',
+                    title: 'hi',
+                    body: '',
+                    created_at: '2026-01-01T00:00:00.000Z',
+                  },
+                  error: null,
+                }),
+            }),
+          }),
+          delete: () => ({
+            eq: (column: string, value: string) => {
+              if (column === 'id') noteDeleteCalledWith = value
+              return Promise.resolve({ error: null, count: 1 })
+            },
+          }),
+        }
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any
+
+    await expect(
+      createNote(supabase, 'u1', { title: 'hi', body: '' }, { idempotencyKey: 'k1' })
+    ).rejects.toMatchObject({ status: 500 })
+    expect(noteDeleteCalledWith).toBe('orphan-3')
+    expect(claimReleased).toBe(true)
+  })
+})
+
+describe('loadStaleAfterS (m-14)', () => {
+  const ORIGINAL = process.env.IDEMPOTENCY_STALE_AFTER_S
+
+  afterEach(() => {
+    if (ORIGINAL === undefined) delete process.env.IDEMPOTENCY_STALE_AFTER_S
+    else process.env.IDEMPOTENCY_STALE_AFTER_S = ORIGINAL
+  })
+
+  it('defaults to 600 when unset', () => {
+    delete process.env.IDEMPOTENCY_STALE_AFTER_S
+    expect(loadStaleAfterS()).toBe(600)
+  })
+
+  it('defaults to 600 when set to an empty string', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = ''
+    expect(loadStaleAfterS()).toBe(600)
+  })
+
+  it('accepts a valid override at or above the floor', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '800'
+    expect(loadStaleAfterS()).toBe(800)
+  })
+
+  it('rejects a non-numeric value instead of producing NaN', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = 'not-a-number'
+    expect(() => loadStaleAfterS()).toThrow(/IDEMPOTENCY_STALE_AFTER_S/)
+  })
+
+  it('rejects a value below the 360s floor', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '30'
+    expect(() => loadStaleAfterS()).toThrow(/>= 360/)
+  })
+
+  it('rejects a non-integer value', () => {
+    process.env.IDEMPOTENCY_STALE_AFTER_S = '600.5'
+    expect(() => loadStaleAfterS()).toThrow()
   })
 })

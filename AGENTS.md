@@ -32,19 +32,24 @@ versioned HTTP API always has parity with the UI.
   with a different body is `409`.
 - **Idempotency claim ownership** (`lib/notes/service.ts`): a claim (in
   flight, `response is null`) older than `IDEMPOTENCY_STALE_AFTER_S`
-  (env var, default `600`) is reclaimable by a retry -- this must stay
-  above your deploy target's actual max request duration (Vercel's default
-  is 300s), or a live-but-slow request can be reclaimed out from under
-  itself. Staleness is computed against the DB's own clock (an RPC,
-  `db_now()`) never the app's `Date.now()`, so instance/DB clock skew can't
-  shrink the window. If a request's own finalize update later matches zero
-  rows, it has lost the claim to a reclaim -- it deletes the note it just
-  created and returns `409 IDEMPOTENCY_CONFLICT` instead of ever returning
-  an orphaned note. There is deliberately no RPC transaction wrapping
-  claim+insert+finalize (an architecture-rule call: that would put the
-  create path's control flow in a DB function, which is business logic, not
-  infra); the tradeoff is a request that crashes between the note insert
-  and the finalize check can leave one uncompensated orphan note, an
+  (env var, default `600`, validated at module load as an integer >= 360 --
+  an invalid value fails fast with a clear error instead of silently
+  producing `NaN`-driven 500s or a window so small it reopens the race
+  below) is reclaimable by a retry -- this must stay above your deploy
+  target's actual max request duration (Vercel's default is 300s), or a
+  live-but-slow request can be reclaimed out from under itself. Staleness
+  is computed against the DB's own clock (an RPC, `db_now()`) never the
+  app's `Date.now()`, so instance/DB clock skew can't shrink the window. If
+  a request's own finalize update later matches zero rows, or the finalize
+  update itself fails, it deletes the note it just created (checking the
+  delete's own result -- a failed or 0-row compensating delete is logged
+  and surfaced as `500`, never returned as if it had succeeded) and returns
+  `409 IDEMPOTENCY_CONFLICT` instead of ever returning an orphaned note.
+  There is deliberately no RPC transaction wrapping claim+insert+finalize
+  (an architecture-rule call: that would put the create path's control
+  flow in a DB function, which is business logic, not infra); the tradeoff
+  is a request that crashes between the note insert and the finalize check
+  can leave one uncompensated orphan note, an
   accepted residual risk for a profile skeleton. `idempotency_keys` has no
   TTL/cleanup yet (a documented follow-up, not a correctness bug).
 

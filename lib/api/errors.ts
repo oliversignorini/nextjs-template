@@ -39,6 +39,7 @@ export const ApiErrors = {
   validation: (message: string, field?: string) =>
     new ApiError(422, 'validation_error', message, field),
   conflict: (message: string) => new ApiError(409, 'conflict', message),
+  internal: (message: string) => new ApiError(500, 'internal_error', message),
   // N-5: this attempt's Idempotency-Key claim was reclaimed by a concurrent
   // retry while this request was still (slowly) alive -- its own note has
   // already been deleted to compensate. The caller should retry the same

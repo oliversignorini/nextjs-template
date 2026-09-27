@@ -3,14 +3,14 @@ factory: slot not serving; starting dev (log: C:\Users\Ollie Signorini\orca\work
 Running 10 tests using 1 worker
 
   ok  1 [chromium] › e2e\api.spec.ts:20:7 › @baseline notes API (no browser) › member can create, list and delete their own note over HTTP (1.3s)
-  ok  2 [chromium] › e2e\api.spec.ts:44:7 › @baseline notes API (no browser) › idempotency key returns the same note instead of creating a duplicate (367ms)
-  ok  3 [chromium] › e2e\api.spec.ts:74:7 › @baseline notes API (no browser) › reusing an Idempotency-Key with a different body returns 409 (256ms)
-  ok  4 [chromium] › e2e\api.spec.ts:95:7 › @baseline notes API (no browser) › @rls-negative a different role cannot modify another user's note (403ms)
-  ok  5 [chromium] › e2e\api.spec.ts:123:7 › @baseline notes API (no browser) › GET /api/v1/me returns the caller's own role (218ms)
-  ok  6 [chromium] › e2e\api.spec.ts:138:5 › @baseline @security self-signup cannot grant admin via user_metadata (245ms)
-  ok  7 [chromium] › e2e\magic-link.spec.ts:35:5 › @baseline magic link signs the user in via Mailpit (1.7s)
-  ok  8 [chromium] › e2e\pagination.spec.ts:10:5 › @baseline @pagination paginates to the end using the API's own next_cursor (498ms)
+  ok  2 [chromium] › e2e\api.spec.ts:44:7 › @baseline notes API (no browser) › idempotency key returns the same note instead of creating a duplicate (340ms)
+  ok  3 [chromium] › e2e\api.spec.ts:74:7 › @baseline notes API (no browser) › reusing an Idempotency-Key with a different body returns 409 (253ms)
+  ok  4 [chromium] › e2e\api.spec.ts:95:7 › @baseline notes API (no browser) › @rls-negative a different role cannot modify another user's note (417ms)
+  ok  5 [chromium] › e2e\api.spec.ts:123:7 › @baseline notes API (no browser) › GET /api/v1/me returns the caller's own role (210ms)
+  ok  6 [chromium] › e2e\api.spec.ts:138:5 › @baseline @security self-signup cannot grant admin via user_metadata (244ms)
+  ok  7 [chromium] › e2e\magic-link.spec.ts:35:5 › @baseline magic link signs the user in via Mailpit (1.9s)
+  ok  8 [chromium] › e2e\pagination.spec.ts:10:5 › @baseline @pagination paginates to the end using the API's own next_cursor (503ms)
   ok  9 [chromium] › e2e\skeleton.spec.ts:14:5 › @baseline member can sign in, create a note, and sign out (1.6s)
-  ok 10 [chromium] › e2e\skeleton.spec.ts:28:5 › @rls-negative a member cannot see another member's note in the UI (815ms)
+  ok 10 [chromium] › e2e\skeleton.spec.ts:28:5 › @rls-negative a member cannot see another member's note in the UI (791ms)
 
-  10 passed (8.9s)
+  10 passed (9.0s)
