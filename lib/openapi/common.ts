@@ -28,8 +28,13 @@ export const commonErrorResponses = {
   500: errorResponse('Internal error'),
 }
 
+// Matches the idempotency_keys.key check constraint (1-255 chars) so an
+// oversized header is rejected with a clear 422 instead of a DB error.
+export const idempotencyKeySchema = z.string().min(1).max(255)
+
 export const idempotencyKeyHeader = z.object({
-  'idempotency-key': z.string().optional().openapi({
-    description: 'Dedupe key: retrying a create with the same key returns the original result.',
+  'idempotency-key': idempotencyKeySchema.optional().openapi({
+    description:
+      'Dedupe key (1-255 chars): retrying a create with the same key returns the original result.',
   }),
 })

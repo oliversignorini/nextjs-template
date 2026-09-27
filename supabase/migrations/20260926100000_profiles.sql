@@ -45,6 +45,12 @@ as $$
   end
 $$;
 
+-- Postgres grants EXECUTE on a new function to PUBLIC by default, which
+-- makes it callable by anon/authenticated over PostgREST's /rpc endpoint.
+-- This function is pure and leaks nothing, but it has no business being a
+-- public API surface -- it exists only for the two triggers below.
+revoke execute on function public.app_role_from_metadata(jsonb) from public, anon, authenticated;
+
 create function public.handle_new_user()
 returns trigger
 language plpgsql

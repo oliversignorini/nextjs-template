@@ -457,10 +457,12 @@
           {
             "schema": {
               "type": "string",
-              "description": "Dedupe key: retrying a create with the same key returns the original result."
+              "minLength": 1,
+              "maxLength": 255,
+              "description": "Dedupe key (1-255 chars): retrying a create with the same key returns the original result."
             },
             "required": false,
-            "description": "Dedupe key: retrying a create with the same key returns the original result.",
+            "description": "Dedupe key (1-255 chars): retrying a create with the same key returns the original result.",
             "name": "idempotency-key",
             "in": "header"
           }

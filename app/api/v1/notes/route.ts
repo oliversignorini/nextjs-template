@@ -2,6 +2,7 @@ import { type NextRequest, NextResponse } from 'next/server'
 import { getAuthedClient } from '@/lib/api/auth'
 import { handleApiError, ApiErrors } from '@/lib/api/errors'
 import { paginationQuerySchema } from '@/lib/api/pagination'
+import { idempotencyKeySchema } from '@/lib/openapi/common'
 import { createNoteSchema } from '@/lib/notes/schemas'
 import { createNote, listNotes } from '@/lib/notes/service'
 import './openapi'
@@ -20,7 +21,10 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const { supabase, user } = await getAuthedClient(request)
-    const idempotencyKey = request.headers.get('idempotency-key') ?? undefined
+    const rawIdempotencyKey = request.headers.get('idempotency-key')
+    const idempotencyKey = rawIdempotencyKey
+      ? idempotencyKeySchema.parse(rawIdempotencyKey)
+      : undefined
     const json = await request.json().catch(() => {
       throw ApiErrors.validation('Body must be valid JSON.')
     })
