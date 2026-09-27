@@ -41,6 +41,37 @@ describe('safeNext', () => {
     expect(safeNext('/notes\n/evil.com', '/login')).toBe('/login')
   })
 
+  // N-3 regression (round 2 -> reopened in round 3): new URL() collapses
+  // "."/".." path segments *after* the origin check has already passed, so
+  // "/.//evil.com" has origin unchanged but a pathname of "//evil.com" --
+  // still protocol-relative once handed to redirect(). The fix validates
+  // the resolved *output*, not just the resolved origin.
+  it('rejects dot-segment tricks that resolve to a protocol-relative path', () => {
+    expect(safeNext('/.//evil.com', '/login')).toBe('/login')
+    expect(safeNext('/..//evil.com', '/login')).toBe('/login')
+    expect(safeNext('/%2e//evil.com', '/login')).toBe('/login')
+    expect(safeNext('/a/..//evil.com', '/login')).toBe('/login')
+  })
+
+  // %2f/%5c (any case) are kept as literal, undecoded path characters by
+  // the URL parser -- they are not treated as path separators, so these
+  // resolve harmlessly to a same-origin path with the percent-escape
+  // preserved verbatim. Asserting the exact safe output (rather than just
+  // "not the fallback") pins this down against a future parser/runtime
+  // change silently starting to decode them.
+  it('keeps percent-encoded slash/backslash variants as a literal, safe same-origin path', () => {
+    expect(safeNext('/%2f%2fevil.com', '/login')).toBe('/%2f%2fevil.com')
+    expect(safeNext('/%5c%5cevil.com', '/login')).toBe('/%5c%5cevil.com')
+    expect(safeNext('/%2F%2Fevil.com', '/login')).toBe('/%2F%2Fevil.com')
+    expect(safeNext('/%5C%5Cevil.com', '/login')).toBe('/%5C%5Cevil.com')
+  })
+
+  it('rejects tabs/newlines hidden inside an otherwise-plausible path', () => {
+    expect(safeNext('/\t/evil.com', '/login')).toBe('/login')
+    expect(safeNext('/\n/evil.com', '/login')).toBe('/login')
+    expect(safeNext('/\r/evil.com', '/login')).toBe('/login')
+  })
+
   it('round-1 M-6 regression: a bare "@host" never reaches ${origin}${next} unsafely -- it resolves to a same-origin path', () => {
     // The original bug concatenated `${origin}${next}` directly with no
     // leading-slash requirement, so next="@evil.com" produced
