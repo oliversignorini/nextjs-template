@@ -1,0 +1,42 @@
+=== Isolation proof: slots 4 and 5 up simultaneously ===
+
+--- docker ps (containers for both slots, no name/port collisions) ---
+supabase_studio_nextjs-template-s5     Up 36 seconds (healthy)   0.0.0.0:54823->3000/tcp, [::]:54823->3000/tcp
+supabase_pg_meta_nextjs-template-s5    Up 37 seconds (healthy)   8080/tcp
+supabase_rest_nextjs-template-s5       Up 38 seconds             3000/tcp
+supabase_inbucket_nextjs-template-s5   Up 39 seconds (healthy)   0.0.0.0:54824->8025/tcp, [::]:54824->8025/tcp
+supabase_auth_nextjs-template-s5       Up 40 seconds (healthy)   9999/tcp
+supabase_kong_nextjs-template-s5       Up 41 seconds (healthy)   0.0.0.0:54821->8000/tcp, [::]:54821->8000/tcp
+supabase_db_nextjs-template-s5         Up 54 seconds (healthy)   0.0.0.0:54822->5432/tcp, [::]:54822->5432/tcp
+supabase_studio_nextjs-template-s4     Up 16 minutes (healthy)   0.0.0.0:54723->3000/tcp, [::]:54723->3000/tcp
+supabase_pg_meta_nextjs-template-s4    Up 16 minutes (healthy)   8080/tcp
+supabase_rest_nextjs-template-s4       Up 16 minutes             3000/tcp
+supabase_inbucket_nextjs-template-s4   Up 16 minutes (healthy)   0.0.0.0:54724->8025/tcp, [::]:54724->8025/tcp
+supabase_auth_nextjs-template-s4       Up 16 minutes (healthy)   9999/tcp
+supabase_kong_nextjs-template-s4       Up 16 minutes (healthy)   0.0.0.0:54721->8000/tcp, [::]:54721->8000/tcp
+supabase_db_nextjs-template-s4         Up 16 minutes (healthy)   0.0.0.0:54722->5432/tcp, [::]:54722->5432/tcp
+
+--- host port bindings: slot 4 DB vs slot 5 DB ---
+5432/tcp -> 0.0.0.0:54722
+5432/tcp -> [::]:54722
+5432/tcp -> 0.0.0.0:54822
+5432/tcp -> [::]:54822
+
+--- .env.local ports (slot 4, currently active in worktree) ---
+# managed-by: scripts/factory/factory.mjs (slot 5); regenerate with `pnpm env:up`.
+FACTORY_SLOT=5
+PORT=3500
+NEXT_PUBLIC_APP_URL=http://localhost:3500
+NEXT_PUBLIC_SUPABASE_URL=http://127.0.0.1:54821
+NEXT_PUBLIC_SUPABASE_ANON_KEY=[REDACTED]
+SUPABASE_SERVICE_ROLE_KEY=[REDACTED]
+E2E_BASE_URL=http://localhost:3500
+E2E_MAILPIT_URL=http://127.0.0.1:54824
+
+--- slot 5 factory ports (from env:up output) ---
+{"WEB_PORT":3500,"SUPABASE_API_PORT":54821,"SUPABASE_DB_PORT":54822,"SUPABASE_SHADOW_PORT":54820,"SUPABASE_STUDIO_PORT":54823,"SUPABASE_MAIL_PORT":54824,"SUPABASE_POOLER_PORT":54829}
+
+--- docker volumes (separate per slot) ---
+local     supabase_db_nextjs-template-s4
+local     supabase_db_nextjs-template-s5
+local     supabase_db_supabase-s4

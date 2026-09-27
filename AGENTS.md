@@ -70,6 +70,14 @@ copy its shape, not its content.
   relinked the same corrupted blob by digest). Bump `PINNED_POSTGRES_VERSION`
   in `factory.mjs` if a newer patch is verified good, or drop the pin
   entirely once the CLI's own default is confirmed >= a known-good version.
+- **`env:up` flakiness on Windows:** `supabase start` spawns ~13 containers
+  through several nested process spawns (pnpm -> node -> the CLI binary ->
+  docker) and intermittently fails a cold start with `EUNKNOWN: unknown
+error, uv_spawn`, even though the compose stack itself is fine and a
+  second attempt succeeds unchanged. `factory.mjs`'s `startWithRetry()`
+  retries up to 3 times before treating it as a real failure -- this is why
+  `env:up`/`env:reset` can take a couple of attempts' worth of time on a
+  cold slot.
 
 ## Software-factory profile (`next-supabase-vercel`)
 

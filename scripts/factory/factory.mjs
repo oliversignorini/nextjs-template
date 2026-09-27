@@ -243,10 +243,25 @@ function parseEnvOutput(text) {
   return vars
 }
 
+/** `supabase start` spawns ~13 containers through several nested process
+ * spawns (pnpm -> node -> the Go binary -> docker); on Windows this
+ * intermittently fails the whole chain with `EUNKNOWN: unknown error,
+ * uv_spawn` on a cold start, even though the underlying compose stack is
+ * usually fine and a second attempt succeeds without changing anything.
+ * Retry a couple of times before treating it as a real failure. */
+function startWithRetry(attempts = 3) {
+  for (let i = 1; i <= attempts; i++) {
+    const res = supabase(['start'], { allowFail: true })
+    if (res.status === 0) return
+    if (i === attempts) fail(`\`supabase start\` failed ${attempts} times in a row`)
+    console.log(`factory: supabase start failed (attempt ${i}/${attempts}), retrying...`)
+  }
+}
+
 function cmdEnvUp() {
   const s = slot()
   renderSatellite(s)
-  supabase(['start'])
+  startWithRetry()
   cmdEnv()
   console.log(`factory: slot ${s} up -> ${JSON.stringify(ports(s))}`)
 }
