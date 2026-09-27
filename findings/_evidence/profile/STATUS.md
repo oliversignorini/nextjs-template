@@ -24,7 +24,7 @@ Timeline on this shared host:
    Diagnosed further: `/usr/local/bin/docker-entrypoint.sh` inside
    `public.ecr.aws/supabase/postgres:17.6.1.171` is a genuine **0-byte
    file** (verified with `docker cp` to the host), causing `exec format
-   error` on every start. Isolated to this one image layer -- `gotrue` and
+error` on every start. Isolated to this one image layer -- `gotrue` and
    `hello-world` images run fine -- almost certainly a layer corrupted by
    the disk-full incident. `docker rmi` + re-pull did not fix it: Docker's
    local content store relinks the same corrupted blob by digest instead
