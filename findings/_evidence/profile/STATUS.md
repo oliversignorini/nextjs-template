@@ -1,6 +1,31 @@
 # Profile build evidence -- status
 
-Last updated: 2026-09-27, FACTORY_SLOT=4, round 2 (re-review fixes).
+Last updated: 2026-09-27, FACTORY_SLOT=4, round 4 (re-review fixes).
+
+## Round 4
+
+Fixed the round-4 re-review's one major finding, N-5 (the residual of
+round 3's N-4): the CAS reclaim guaranteed exactly one claim *owner*, but
+not exactly one note *creator* -- a slow-but-alive original could still
+create a duplicate note after its claim was reclaimed by a retry, because
+its finalize update's zero-row result (PostgREST reports that as success)
+went undetected. Fixed in the service layer: the finalize now checks
+`.select('claim_token').maybeSingle()`, and on 0 rows deletes the orphan
+note it just created and returns `409 IDEMPOTENCY_CONFLICT`. Also closed
+m-11 (mixed clocks -- staleness now computed against the DB's own clock
+via a `db_now()` RPC) and raised the stale window to `IDEMPOTENCY_STALE_AFTER_S`
+(default 600s, above Vercel's 300s max request duration). m-9 (key TTL)
+remains a documented follow-up. `pnpm test:unit` grew from 31 to 32;
+pgTAP grew from 21 to 26 (a full N-5 timeline: stall, reclaim, clean
+retry finalize, lost-ownership finalize, compensating delete, exactly
+one surviving note). Full detail in the PR description and
+`docs/profiles-build/reviews/next-supabase-r3.md`.
+
+## Round 3 (not separately logged here -- see PR description)
+
+Fixed N-3 (reopened, dot-segment open redirect) and N-4 (idempotency
+double-create race via an atomic CAS reclaim), plus m-8/m-10. See the PR
+description's "Round 3" section and `docs/profiles-build/reviews/next-supabase-r2.md`.
 
 ## Round 2
 
@@ -44,16 +69,16 @@ slot 4 after the fixes:
 | ----------------------------- | ---------------------------------------- | --------------------- |
 | `pnpm lint`                   | pass                                     | `lint.txt`            |
 | `pnpm typecheck`              | pass                                     | `typecheck.txt`       |
-| `pnpm test:unit`              | pass, 27/27                              | `test-unit.txt`       |
+| `pnpm test:unit`              | pass, 32/32                              | `test-unit.txt`       |
 | `pnpm build`                  | pass (round 0)                           | `build.txt`           |
 | `pnpm design:check`           | pass, 0 findings (round 0)               | `design-check.txt`    |
 | `pnpm api:check`              | pass, no drift (Windows and Linux)       | `api-check.txt`       |
 | `pnpm env:up` / `env:reset`   | pass                                     | `env-reset.txt`       |
 | `pnpm health`                 | pass (`{"slot":4,"web":true,"ok":true}`) | --                    |
-| `pnpm test:db` (pgTAP)        | pass, 19/19                              | `test-db.txt`         |
+| `pnpm test:db` (pgTAP)        | pass, 26/26                              | `test-db.txt`         |
 | `pnpm e2e:baseline`           | pass, 10/10                              | `e2e-baseline.txt`    |
 | Isolation proof (slots 4 + 5) | pass (round 0)                           | `isolation-proof.txt` |
-| CI (GitHub Actions)           | see round 2 section                      | CI run URL in PR body |
+| CI (GitHub Actions)           | see PR description, round 4              | CI run URL in PR body |
 
 ## Environment incidents worked through (all fixed, not worked around)
 
