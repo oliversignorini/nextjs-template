@@ -3,8 +3,9 @@
 // pulling in server-only auth/service code (that script runs under plain
 // Node, not the Next.js server runtime).
 import { registry } from '@/lib/openapi/registry'
+import { commonErrorResponses, idempotencyKeyHeader } from '@/lib/openapi/common'
 import { paginationQuerySchema } from '@/lib/api/pagination'
-import { createNoteSchema, noteSchema } from '@/lib/notes/schemas'
+import { createNoteSchema, noteSchema, notesPageSchema } from '@/lib/notes/schemas'
 
 registry.registerPath({
   method: 'get',
@@ -14,13 +15,11 @@ registry.registerPath({
   request: { query: paginationQuerySchema },
   responses: {
     200: {
-      description: 'A page of notes',
-      content: {
-        'application/json': {
-          schema: noteSchema.array(),
-        },
-      },
+      description:
+        'A page of notes. `next_cursor` is an opaque token: pass it back as `cursor` for the next page.',
+      content: { 'application/json': { schema: notesPageSchema } },
     },
+    ...commonErrorResponses,
   },
 })
 
@@ -30,6 +29,7 @@ registry.registerPath({
   summary: 'Create a note',
   security: [{ bearerAuth: [] }],
   request: {
+    headers: idempotencyKeyHeader,
     body: { content: { 'application/json': { schema: createNoteSchema } } },
   },
   responses: {
@@ -37,5 +37,10 @@ registry.registerPath({
       description: 'The created note',
       content: { 'application/json': { schema: noteSchema } },
     },
+    409: {
+      description:
+        'Idempotency-Key reused with a different body, or a request with it is still in flight',
+    },
+    ...commonErrorResponses,
   },
 })

@@ -12,6 +12,14 @@ export const noteSchema = registry.register(
   })
 )
 
+export const notesPageSchema = registry.register(
+  'NotesPage',
+  z.object({
+    data: z.array(noteSchema),
+    next_cursor: z.string().nullable(),
+  })
+)
+
 export const createNoteSchema = registry.register(
   'CreateNoteInput',
   z.object({

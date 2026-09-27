@@ -46,20 +46,50 @@ test.describe('@baseline notes API (no browser)', () => {
     baseURL,
   }) => {
     const token = await tokenFor(request, 'member2@demo.test')
-    const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': 'test-fixed-key-1' }
+    const key = `test-idem-${Date.now()}`
+    const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': key }
 
     const first = await request.post(`${baseURL}/api/v1/notes`, {
       headers,
       data: { title: 'idem', body: '' },
     })
+    expect(first.status(), await first.text()).toBe(201)
+    const firstBody = await first.json()
+
     const second = await request.post(`${baseURL}/api/v1/notes`, {
       headers,
       data: { title: 'idem', body: '' },
     })
-
-    const firstBody = await first.json()
+    expect(second.status()).toBe(201)
     const secondBody = await second.json()
     expect(secondBody.id).toBe(firstBody.id)
+
+    const list = await request.get(`${baseURL}/api/v1/notes?limit=100`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const { data } = await list.json()
+    expect(data.filter((n: { id: string }) => n.id === firstBody.id)).toHaveLength(1)
+  })
+
+  test('reusing an Idempotency-Key with a different body returns 409', async ({
+    request,
+    baseURL,
+  }) => {
+    const token = await tokenFor(request, 'member2@demo.test')
+    const key = `test-idem-conflict-${Date.now()}`
+    const headers = { Authorization: `Bearer ${token}`, 'Idempotency-Key': key }
+
+    const first = await request.post(`${baseURL}/api/v1/notes`, {
+      headers,
+      data: { title: 'a', body: '' },
+    })
+    expect(first.status()).toBe(201)
+
+    const second = await request.post(`${baseURL}/api/v1/notes`, {
+      headers,
+      data: { title: 'b', body: '' },
+    })
+    expect(second.status()).toBe(409)
   })
 
   test("@rls-negative a different role cannot modify another user's note", async ({
@@ -89,4 +119,51 @@ test.describe('@baseline notes API (no browser)', () => {
     })
     expect(stillThere.ok()).toBeTruthy()
   })
+
+  test("GET /api/v1/me returns the caller's own role", async ({ request, baseURL }) => {
+    const token = await tokenFor(request, 'admin@demo.test')
+    const res = await request.get(`${baseURL}/api/v1/me`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    expect(res.ok()).toBeTruthy()
+    const profile = await res.json()
+    expect(profile.email).toBe('admin@demo.test')
+    expect(profile.role).toBe('admin')
+  })
+})
+
+// B-1 regression: a self-registered user must never get admin rights just
+// because they set user_metadata (the only thing a public signUp() with the
+// anon key can set) to role:'admin'.
+test('@baseline @security self-signup cannot grant admin via user_metadata', async ({
+  request,
+  baseURL,
+}) => {
+  const email = `escalation-${Date.now()}@demo.test`
+  const signUp = await request.post(`${SUPABASE_URL}/auth/v1/signup`, {
+    headers: { apikey: ANON_KEY, 'content-type': 'application/json' },
+    data: { email, password: DEMO_PASSWORD, data: { role: 'admin' } },
+  })
+  expect(signUp.ok(), await signUp.text()).toBeTruthy()
+  const { access_token } = await signUp.json()
+  expect(
+    access_token,
+    'expected an immediate session (email confirmations are off locally)'
+  ).toBeTruthy()
+
+  const me = await request.get(`${baseURL}/api/v1/me`, {
+    headers: { Authorization: `Bearer ${access_token}` },
+  })
+  expect(me.ok()).toBeTruthy()
+  const profile = await me.json()
+  expect(profile.role).toBe('member')
+
+  // And the resulting session really can't see another user's notes the
+  // way an admin could -- proves the escalation attempt has no effect
+  // beyond the profiles.role column.
+  const list = await request.get(`${baseURL}/api/v1/notes`, {
+    headers: { Authorization: `Bearer ${access_token}` },
+  })
+  const { data } = await list.json()
+  expect(data).toEqual([])
 })
