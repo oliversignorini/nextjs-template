@@ -22,7 +22,7 @@ supabase_db_nextjs-template-s4         Up 16 minutes (healthy)   0.0.0.0:54722->
 5432/tcp -> 0.0.0.0:54822
 5432/tcp -> [::]:54822
 
---- .env.local ports (slot 4, currently active in worktree) ---
+--- .env.local ports (slot 5's env:up ran most recently in this worktree) ---
 # managed-by: scripts/factory/factory.mjs (slot 5); regenerate with `pnpm env:up`.
 FACTORY_SLOT=5
 PORT=3500
