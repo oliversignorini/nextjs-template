@@ -5,8 +5,8 @@ Last updated: 2026-09-27, FACTORY_SLOT=4, round 4 (re-review fixes).
 ## Round 4
 
 Fixed the round-4 re-review's one major finding, N-5 (the residual of
-round 3's N-4): the CAS reclaim guaranteed exactly one claim *owner*, but
-not exactly one note *creator* -- a slow-but-alive original could still
+round 3's N-4): the CAS reclaim guaranteed exactly one claim _owner_, but
+not exactly one note _creator_ -- a slow-but-alive original could still
 create a duplicate note after its claim was reclaimed by a retry, because
 its finalize update's zero-row result (PostgREST reports that as success)
 went undetected. Fixed in the service layer: the finalize now checks
