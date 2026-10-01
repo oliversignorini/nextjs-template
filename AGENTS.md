@@ -212,12 +212,12 @@ a pinned commit. Each `SKILL.md` front matter carries `source`, `source_ref`
 (the SHA) and `license`; provenance, licences and the full list of local edits
 are in [`.claude/skills/THIRD-PARTY-LICENSES.md`](./.claude/skills/THIRD-PARTY-LICENSES.md).
 
-| Skill                                | Load it before                                                                    |
-| ------------------------------------ | --------------------------------------------------------------------------------- |
-| `shadcn`                             | Any UI work: adding/composing `components/ui`, styling, forms, icons              |
-| `supabase`                           | Anything touching Supabase: Auth, `@supabase/ssr`, CLI, config, debugging         |
-| `supabase-postgres-best-practices`   | Any migration, schema, RLS policy, index, trigger or slow query                   |
-| `vercel-react-best-practices`        | Writing/reviewing React or Next.js: data fetching, re-renders, bundle size        |
+| Skill                              | Load it before                                                             |
+| ---------------------------------- | -------------------------------------------------------------------------- |
+| `shadcn`                           | Any UI work: adding/composing `components/ui`, styling, forms, icons       |
+| `supabase`                         | Anything touching Supabase: Auth, `@supabase/ssr`, CLI, config, debugging  |
+| `supabase-postgres-best-practices` | Any migration, schema, RLS policy, index, trigger or slow query            |
+| `vercel-react-best-practices`      | Writing/reviewing React or Next.js: data fetching, re-renders, bundle size |
 
 They are edited to point at this repo: the shadcn skill runs the CLI as
 `pnpm dlx` (never `npx`/`bunx`), reads `components.json` statically instead of
