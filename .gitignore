@@ -43,8 +43,10 @@ supabase/.branches/
 # vercel
 .vercel
 
-# claude code
-.claude/
+# claude code -- local settings/state stay out of git, but the vendored
+# agent skills in .claude/skills are committed content (see AGENTS.md > Skills)
+.claude/*
+!.claude/skills/
 
 # playwright mcp
 .playwright-mcp/

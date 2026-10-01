@@ -6,3 +6,8 @@ test-results/
 .factory/
 supabase/.temp/
 openapi.json
+
+# Vendored third-party agent skills -- kept byte-faithful to the pinned
+# upstream SHA (see .claude/skills/THIRD-PARTY-LICENSES.md). Reformatting them
+# would make every refresh a merge conflict.
+.claude/skills/
