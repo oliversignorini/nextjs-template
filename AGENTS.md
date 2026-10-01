@@ -205,6 +205,33 @@ front matter `type, severity (blocking|major|minor), status
 Action/Postgres function instead of a `service.ts`, or `db reset` from
 outside your own slot's satellite dir.
 
+## Skills
+
+Vendored agent skills live in `.claude/skills/<name>/`, copied from upstream at
+a pinned commit. Each `SKILL.md` front matter carries `source`, `source_ref`
+(the SHA) and `license`; provenance, licences and the full list of local edits
+are in [`.claude/skills/THIRD-PARTY-LICENSES.md`](./.claude/skills/THIRD-PARTY-LICENSES.md).
+
+| Skill                                | Load it before                                                                    |
+| ------------------------------------ | --------------------------------------------------------------------------------- |
+| `shadcn`                             | Any UI work: adding/composing `components/ui`, styling, forms, icons              |
+| `supabase`                           | Anything touching Supabase: Auth, `@supabase/ssr`, CLI, config, debugging         |
+| `supabase-postgres-best-practices`   | Any migration, schema, RLS policy, index, trigger or slow query                   |
+| `vercel-react-best-practices`        | Writing/reviewing React or Next.js: data fetching, re-renders, bundle size        |
+
+They are edited to point at this repo: the shadcn skill runs the CLI as
+`pnpm dlx` (never `npx`/`bunx`), reads `components.json` statically instead of
+shelling out on load, and treats the Critical Rules as `@shadcn/lint` gates;
+both Supabase skills open with this repo's non-negotiables (API-first services,
+no business logic in Postgres, RLS as defence in depth, roles from
+`raw_app_meta_data`, forward-only migrations). **Where a skill and this file
+disagree, this file wins.**
+
+`pnpm skills:check` asserts every relative Markdown link under `.claude/skills`
+still resolves -- run it after editing or refreshing a skill. The directory is
+in `.prettierignore` so the vendored text stays byte-faithful to its upstream
+SHA; don't reformat it.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

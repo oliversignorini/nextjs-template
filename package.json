@@ -34,7 +34,8 @@
     "design:check": "npx --yes impeccable@4.1.0 detect --json app components",
     "api:check": "tsx scripts/openapi/generate.ts --check",
     "api:generate": "tsx scripts/openapi/generate.ts",
-    "gen:types": "node scripts/factory/factory.mjs gen:types"
+    "gen:types": "node scripts/factory/factory.mjs gen:types",
+    "skills:check": "node scripts/skills/check-links.mjs"
   },
   "dependencies": {
     "@supabase/ssr": "^0.8.0",
